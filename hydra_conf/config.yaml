@@ -1,0 +1,10 @@
+defaults:
+  - dataset: mnist
+  - _self_
+
+training:
+  num_epochs: 100
+  learning_rate: 0.0001
+  seed: 123
+  latent_dim: 16
+  log_dir: ${hydra:runtime.cwd}/logs

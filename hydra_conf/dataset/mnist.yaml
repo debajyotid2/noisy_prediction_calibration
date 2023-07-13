@@ -1,0 +1,8 @@
+img_height: 28
+img_width: 28
+n_channels: 1
+batch_size: 128
+data_size: 60000
+num_classes: 10
+val_frac: 0.2
+name: mnist

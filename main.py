@@ -16,7 +16,7 @@ from src.dataset import (
     standardize,
     make_dataset,
 )
-from src.model import model
+from src.model import CNN
 from src.training import train_model
 
 cs = ConfigStore.instance()
@@ -41,6 +41,9 @@ def main(args: Args):
     tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=args.training.log_dir)
 
     # Initialize model
+    classifier = CNN(
+
+    # Train
 
     train_model(
         model=model,

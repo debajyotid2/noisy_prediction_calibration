@@ -3,7 +3,6 @@ Functions for preprocessing and transforming image datasets.
 """
 import random
 import logging
-from pathlib import Path
 from typing import Any
 import numpy as np
 import tensorflow as tf

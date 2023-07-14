@@ -54,14 +54,20 @@ def generate_prior(
             embeddings.append(embedding[class_idxs[gathered[-1]]])
             classes.append(class_id)
 
+    logging.info(f"Initial embeddings generated in {(perf_counter() - start_time)/60:.2f} minutes.")
+
     # Fit classifier embeddings to classes in KNN
+
+    start_time = perf_counter()
     classes = np.asarray(classes, dtype=np.int32)
     embeddings = np.asarray(embeddings, dtype=np.int32)
     knn.fit(embeddings, classes)
     del embeddings
 
+    logging.info(f"KNN trained in {(perf_counter() - start_time)/60:.2f} minutes.")
     # Generate predictions using KNN for classes
     # NOTE: New embeddings must be generated for prediction
+    start_time = perf_counter()
     embeddings = np.zeros((len_train, int(classifier.dim**2.0)))
     for idx, (x_batch, _) in enumerate(dataset):
         img_emb, _ = classifier(x_batch)
@@ -69,8 +75,11 @@ def generate_prior(
             idx * x_batch.shape[0] : (idx + 1) * x_batch.shape[0]
         ] = img_emb.numpy()
 
-    output_labels = knn.predict(embeddings)
+    logging.info(f"New embeddings generated in {(perf_counter() - start_time)/60:.2f} minutes.")
+    
+    start_time = perf_counter()
     output_probs = knn.predict_proba(embeddings)
+    output_labels = np.argmax(output_probs, axis=-1)
     padded = np.zeros((output_probs.shape[0], n_classes))
     padded[:, knn.classes_] = output_probs
 

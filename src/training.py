@@ -39,7 +39,7 @@ class ClassifierTrainStep:
         self.model = model
         self.optimizer = optimizer
         self.loss_func = loss_func
-    
+
     @tf.function
     def __call__(
         self, x_batch: tf.Tensor, y_batch: tf.Tensor
@@ -52,7 +52,7 @@ class ClassifierTrainStep:
             loss = self.loss_func(y_batch, logits)
         grad = tape.gradient(loss, self.model.trainable_variables)
         self.optimizer.apply_gradients(zip(grad, self.model.trainable_variables))
-        
+
         y_pred = tf.argmax(tf.nn.softmax(logits), axis=-1)
         y_batch = tf.argmax(y_batch, axis=-1)
         correct = tf.where(y_pred == y_batch, 1.0, 0.0)
@@ -99,7 +99,7 @@ class AETrainStep:
         self.ae = autoencoder
         self.optimizer = optimizer
         self.bce_with_logits = tf.keras.losses.BinaryCrossentropy(
-            from_logits=True, reduction=tf.keras.losses.Reduction.SUM
+            from_logits=True, reduction=tf.keras.losses.Reduction.NONE
         )
         self.kld_reg = kld_reg
         self.prior_norm = prior_norm
@@ -107,19 +107,21 @@ class AETrainStep:
     @tf.function
     def __call__(
         self, x_batch: tf.Tensor, y_pred: tf.Tensor, y_prior: tf.Tensor
-    ) -> tf.Tensor:
+    ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
         """
         Training step.
         """
         with tf.GradientTape() as tape:
             y_gen, encoded_ypred = self.ae(x_batch, y_pred)
-            rec_loss = self.bce_with_logits(y_pred, y_gen)
-            alpha_prior = self.prior_norm * y_prior
-            dist_loss = kl_divergence(alpha_prior, encoded_ypred)
-            loss = tf.reduce_mean(rec_loss + self.kld_reg * dist_loss)
+            rec_loss = tf.reduce_mean(self.bce_with_logits(y_pred, y_gen))
+            alpha_prior = self.prior_norm * y_prior + 1.0 + 1.0 / y_gen.shape[-1]
+            dist_loss = self.kld_reg * tf.reduce_mean(
+                kl_divergence(alpha_prior, encoded_ypred)
+            )
+            loss = rec_loss + dist_loss
         grad = tape.gradient(loss, self.ae.trainable_variables)
         self.optimizer.apply_gradients(zip(grad, self.ae.trainable_variables))
-        return loss
+        return loss, rec_loss, dist_loss
 
 
 def train_classifier(
@@ -208,15 +210,29 @@ def train_npc(
     train_step = AETrainStep(autoencoder, optimizer, kld_reg, prior_norm)
     for epoch in range(num_epochs):
         train_loss = 0.0
+        rec_loss_train = 0.0
+        dist_loss_train = 0.0
+        rec_losses = []
+        dist_losses = []
         for x_batch, y_pred, y_prior in train_npc_ds:
             # Generate alpha prior
-            loss = train_step(x_batch, y_pred, y_prior)
+            loss, rec_loss, dist_loss = train_step(x_batch, y_pred, y_prior)
             train_loss += loss
+            rec_loss_train += rec_loss
+            dist_loss_train += dist_loss
+            rec_losses.append(rec_loss)
+            dist_losses.append(dist_loss)
+        breakpoint()
 
         # Log metrics
         with train_summary_writer.as_default():
             tf.summary.scalar("train_loss", train_loss, step=epoch)
+            tf.summary.scalar("rec_loss", rec_loss_train, step=epoch)
+            tf.summary.scalar("dist_loss", dist_loss_train, step=epoch)
 
         logging.info(
-            f"Epoch [{epoch+1}/{num_epochs}]," f" train loss: {train_loss:.4f},"
+            f"Epoch [{epoch+1}/{num_epochs}],"
+            f" train loss: {train_loss:.4f},"
+            f" reconstruction loss: {rec_loss_train:.4f},"
+            f" distribution loss: {dist_loss_train:.4f},"
         )

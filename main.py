@@ -53,9 +53,6 @@ def main(args: Args):
     train_ds = make_dataset(x_train, y_train, args.dataset.batch_size)
     val_ds = make_dataset(x_val, y_val, args.dataset.batch_size)
 
-    # Tensorboard callback
-    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=args.training.log_dir)
-
     # Initialize classifier and autoencoder
     classifier = CNN(
         n_classes=args.dataset.n_classes,
@@ -92,7 +89,7 @@ def main(args: Args):
     gc.collect()
 
     # Create dataset for prior generation
-    train_pred_ds = make_dataset(x_train, y_pred)
+    train_pred_ds = make_dataset(x_train, y_pred, args.dataset.batch_size)
 
     # Generate prior
     prior_labels, prior_probabilities = generate_prior(

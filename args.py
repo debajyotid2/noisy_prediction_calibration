@@ -10,7 +10,8 @@ class TrainingArgs:
     learning_rate: float
     seed: int
     log_dir: str
-    latent_dim: int
+    model_dim: int
+    dropout_p: float
 
 
 @dataclass
@@ -20,12 +21,21 @@ class DatasetArgs:
     n_channels: int
     batch_size: int
     data_size: int
-    num_classes: int
+    n_classes: int
     val_frac: float
     name: str
+
+@dataclass
+class NPCArgs:
+    softplus_beta: float
+    n_neighbors: int
+    num_epochs: int
+    kld_reg: float
+    prior_norm: float
 
 
 @dataclass
 class Args:
     training: TrainingArgs
     dataset: DatasetArgs
+    npc: NPCArgs

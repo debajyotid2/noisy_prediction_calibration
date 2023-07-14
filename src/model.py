@@ -13,13 +13,14 @@ from tensorflow.keras.layers import (
     BatchNormalization,
 )
 
+
 def softplus(x: tf.Tensor, beta: float) -> tf.Tensor:
     """
     softplus(x) = 1/beta * log(1+ exp(beta * x))
     """
     if beta == 0.0:
         return 0.0
-    return 1.0 / beta * tf.log(1 + tf.exp(beta * x))
+    return 1.0 / beta * tf.math.log(1 + tf.exp(beta * x))
 
 
 class CNN(Model):
@@ -29,6 +30,7 @@ class CNN(Model):
 
     def __init__(
         self,
+        *,
         n_classes: int = 10,
         dim: int = 16,
         img_height: int = 28,
@@ -37,6 +39,7 @@ class CNN(Model):
         dropout_p: float = 0.2,
     ):
         super().__init__()
+        self.dim = dim
         self.model = tf.keras.Sequential(
             layers=[
                 InputLayer((img_height, img_width, n_channels)),
@@ -50,7 +53,8 @@ class CNN(Model):
             ]
         )
         self.output_layer = Dense(n_classes)
-
+    
+    @tf.function
     def call(
         self, input_tensor: tf.Tensor, training: bool = False
     ) -> tuple[tf.Tensor, tf.Tensor]:
@@ -68,12 +72,27 @@ class CVAE(Model):
     """
 
     def __init__(
-        self, n_classes: int = 10, dropout_p: float = 0.2, softplus_beta: float = 0.1
+        self,
+        *,
+        n_classes: int = 10,
+        dim: int = 16,
+        img_height: int = 28,
+        img_width: int = 28,
+        n_channels: int = 1,
+        dropout_p: float = 0.2,
+        softplus_beta: float = 0.1,
     ):
         super().__init__()
         self.n_classes = n_classes
         self.softplus_beta = softplus_beta
-        self.forward_encoder = CNN(n_classes=n_classes, dropout_p=dropout_p)
+        self.forward_encoder = CNN(
+            n_classes=n_classes,
+            dim=dim,
+            img_height=img_height,
+            img_width=img_width,
+            n_channels=n_channels,
+            dropout_p=dropout_p,
+        )
         self.encoder = Dense(n_classes)
         self.decoder = Dense(n_classes)
 
@@ -92,7 +111,7 @@ class CVAE(Model):
         """
         noise = tf.random.uniform(shape=encoded.shape)
         return tf.exp(
-            (tf.ones_like(encoded) / encoded) * tf.log(encoded * noise)
+            (tf.ones_like(encoded) / encoded) * tf.math.log(encoded * noise)
             + tf.math.lgamma(encoded)
         )
 
@@ -101,9 +120,10 @@ class CVAE(Model):
         Decodes.
         """
         _, logits = self.forward_encoder(inputs)
-        joined = tf.cat([logits, labels], axis=1)
+        joined = tf.concat([logits, labels], axis=1)
         return self.decoder(joined)
-
+    
+    @tf.function
     def call(self, images: tf.Tensor, preds: tf.Tensor) -> tuple[tf.Tensor, tf.Tensor]:
         """
         Expects dataset images and predicted labels from a classifier.

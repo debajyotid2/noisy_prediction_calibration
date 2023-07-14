@@ -1,7 +1,7 @@
 """
 Functions for preprocessing and transforming image datasets.
 """
-import random
+from enum import Enum, auto
 import logging
 from typing import Any
 import numpy as np
@@ -15,6 +15,18 @@ DATASETS = {
     "cifar10": tf.keras.datasets.cifar10,
     "fashion mnist": tf.keras.datasets.fashion_mnist,
 }
+
+# Class transition matrix for asymmetric noise
+TRANSITION = {0: 0, 2: 0, 4: 7, 7: 7, 1: 1, 9: 1, 3: 5, 5: 3, 6: 6, 8: 8}
+
+
+class NoiseType(Enum):
+    """
+    Class for different noisy types.
+    """
+
+    SYMMETRIC = auto()
+    ASYMMETRIC = auto()
 
 
 def get_mean_std(
@@ -44,6 +56,53 @@ def standardize(
     for i in range(images.shape[-1]):
         images[:, :, :, i] = (images[:, :, :, i] - mean[i]) / std[i]
     return images
+
+
+def convert_to_one_hot(
+    image: tf.Tensor, label: tf.Tensor
+) -> tuple[tf.Tensor, tf.Tensor]:
+    """
+    Convert categorical label to one-hot format.
+    """
+    label = tf.one_hot(label, 10)
+    return image, tf.cast(label, tf.float32)
+
+def convert_to_one_hot_with_prior(
+        image: tf.Tensor, pred: tf.Tensor, prior: tf.Tensor
+) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+    """
+    Convert categorical label to one-hot format for predictions and priors.
+    """
+    pred = tf.one_hot(pred, 10)
+    prior = tf.one_hot(prior, 10)
+    return image, tf.cast(pred, tf.float32), tf.cast(prior, tf.float32)
+
+def generate_noisy_labels(
+    noise_rate: float,
+    gt_labels: np.ndarray[Any, Any],
+    noise_mode: NoiseType = NoiseType.SYMMETRIC,
+    transition: dict[int, int] = TRANSITION,
+) -> np.ndarray[Any, Any]:
+    """
+    Creates noisy labels by randomly sampling from ground truth labels
+    according to the type of noise and noise rate (% of noise).
+    """
+    rng = np.random.default_rng()
+
+    noisy_labels = np.copy(gt_labels)
+    idxs = np.arange(gt_labels.shape[0])
+    rng.shuffle(idxs)
+
+    noisy_label_idxs = idxs[: int(noise_rate * len(gt_labels))]
+
+    if noise_mode == NoiseType.SYMMETRIC:
+        noisy_labels[noisy_label_idxs] = np.random.randint(
+            0, 10, size=noisy_label_idxs.shape
+        )
+    else:
+        for idx in noisy_label_idxs:
+            noisy_labels[idx] = transition[gt_labels[idx].item()]
+    return noisy_labels
 
 
 def train_val_split(
@@ -79,7 +138,31 @@ def make_dataset(
     num_samples = int(len(x) / batch_size) * batch_size
     logging.debug(f"{len(x) - num_samples} samples discarded.")
 
-    dataset = tf.data.Dataset.from_tensor_slices((x[:num_samples], y[:num_samples]))
+    dataset = tf.data.Dataset.from_tensor_slices(
+        (x[:num_samples], y[:num_samples])
+    ).map(convert_to_one_hot, num_parallel_calls=tf.data.AUTOTUNE)
+    dataset = dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    return dataset
+
+
+def make_npc_dataset(
+    *,
+    x: np.ndarray[Any, Any],
+    y_pred: np.ndarray[Any, Any],
+    y_prior: np.ndarray[Any, Any],
+    batch_size: int = 32,
+) -> tf.data.Dataset:
+    """
+    Makes a Tensorflow batched dataset from numpy images, predicted labels and
+    prior labels.  Discards additional samples such that the dataset length is
+    an exact multiple of the batch size.
+    """
+    num_samples = int(len(x) / batch_size) * batch_size
+    logging.debug(f"{len(x) - num_samples} samples discarded.")
+
+    dataset = tf.data.Dataset.from_tensor_slices(
+            (x[:num_samples], y_pred[:num_samples], y_prior[:num_samples])
+    ).map(convert_to_one_hot_with_prior, num_parallel_calls=tf.data.AUTOTUNE)
     dataset = dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
     return dataset
 

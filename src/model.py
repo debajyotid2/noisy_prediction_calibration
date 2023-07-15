@@ -81,10 +81,27 @@ class CVAE(Model):
         n_channels: int = 1,
         dropout_p: float = 0.2,
         softplus_beta: float = 0.1,
+        kld_reg: float = 1.0,
+        prior_norm: float = 5.0,
     ):
         super().__init__()
+
+        self.kld_reg = kld_reg
+        self.prior_norm = prior_norm
         self.n_classes = n_classes
         self.softplus_beta = softplus_beta
+
+        # loss function
+        self.bce_with_logits = tf.keras.losses.BinaryCrossentropy(
+            from_logits=True, reduction=tf.keras.losses.Reduction.NONE
+        )
+
+        # loss trackers
+        self.rec_loss_tracker = tf.keras.metrics.Mean(name="rec_loss")
+        self.dist_loss_tracker = tf.keras.metrics.Mean(name="dist_loss")
+        self.loss_tracker = tf.keras.metrics.Mean(name="train_loss")
+
+        # models
         self.forward_encoder = CNN(
             n_classes=n_classes,
             dim=dim,
@@ -109,7 +126,7 @@ class CVAE(Model):
         """
         Reparametrizes.
         """
-        noise = tf.random.uniform(shape=encoded.shape)
+        noise = tf.random.uniform(shape=tf.shape(encoded))
         return tf.exp(
             (tf.ones_like(encoded) / encoded) * tf.math.log(encoded * noise)
             + tf.math.lgamma(encoded)
@@ -124,12 +141,104 @@ class CVAE(Model):
         return self.decoder(joined)
 
     @tf.function
-    def call(self, images: tf.Tensor, preds: tf.Tensor) -> tuple[tf.Tensor, tf.Tensor]:
+    def call(
+        self, data: tuple[tf.Tensor, tf.Tensor], training: bool = True
+    ) -> tuple[tf.Tensor, tf.Tensor]:
         """
         Expects dataset images and predicted labels from a classifier.
         Returns generated labels and encoded preds.
         """
+        images, preds = data
         encoded = self.encode(images, preds)
         z = self.reparametrize(encoded)
         generated = self.decode(images, z)
         return generated, encoded
+
+    @property
+    def metrics(self) -> list[tf.keras.metrics.Metric]:
+        """
+        Returns all metrics.
+        """
+        return [self.rec_loss_tracker, self.dist_loss_tracker, self.loss_tracker]
+
+    def _kl_divergence(
+        self, alpha_prior: tf.Tensor, alpha_inferred: tf.Tensor
+    ) -> float:
+        """
+        KL divergence loss.
+        """
+        kld = (
+            tf.math.lgamma(alpha_prior)
+            - tf.math.lgamma(alpha_inferred)
+            + (alpha_inferred - alpha_prior) * tf.math.digamma(alpha_inferred)
+        )
+        return tf.reduce_sum(kld, axis=1)
+
+    def compute_loss(
+        self,
+        y_pred: tf.Tensor,
+        y_gen: tf.Tensor,
+        y_prior: tf.Tensor,
+        alpha_inferred: tf.Tensor,
+    ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+        """
+        Compute reconstruction and distribution losses.
+        """
+        rec_loss = tf.reduce_sum(self.bce_with_logits(y_pred, y_gen))
+        alpha_prior = self.prior_norm * y_prior + 1.0 + 1.0 / y_gen.shape[-1]
+        dist_loss = self.kld_reg * tf.reduce_sum(
+            self._kl_divergence(alpha_prior, alpha_inferred)
+        )
+        loss = rec_loss + dist_loss
+        return loss, rec_loss, dist_loss
+
+    @tf.function
+    def train_step(
+        self, data: tuple[tf.Tensor, tf.Tensor, tf.Tensor]
+    ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+        """
+        Training step.
+        """
+        x_batch, y_pred, y_prior = data
+        with tf.GradientTape() as tape:
+            y_gen, encoded_ypred = self((x_batch, y_pred), training=True)
+            loss, rec_loss, dist_loss = self.compute_loss(
+                y_pred, y_gen, y_prior, encoded_ypred
+            )
+        grad = tape.gradient(loss, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(grad, self.trainable_variables))
+
+        # Update metrics
+        self.rec_loss_tracker.update_state(rec_loss)
+        self.dist_loss_tracker.update_state(dist_loss)
+        self.loss_tracker.update_state(loss)
+
+        return dict(
+            rec_loss=self.rec_loss_tracker.result(),
+            dist_loss=self.dist_loss_tracker.result(),
+            train_loss=self.loss_tracker.result(),
+        )
+
+    @tf.function
+    def test_step(
+        self, data: tuple[tf.Tensor, tf.Tensor, tf.Tensor]
+    ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+        """
+        Evaluation step.
+        """
+        x_batch, y_pred, y_prior = data
+        y_gen, encoded_ypred = self((x_batch, y_pred), training=True)
+        loss, rec_loss, dist_loss = self.compute_loss(
+            y_pred, y_gen, y_prior, encoded_ypred
+        )
+
+        # Update metrics
+        self.rec_loss_tracker.update_state(rec_loss)
+        self.dist_loss_tracker.update_state(dist_loss)
+        self.loss_tracker.update_state(loss)
+
+        return dict(
+            rec_loss=self.rec_loss_tracker.result(),
+            dist_loss=self.dist_loss_tracker.result(),
+            val_loss=self.loss_tracker.result(),
+        )

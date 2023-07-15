@@ -3,7 +3,7 @@ defaults:
   - _self_
 
 training:
-  num_epochs: 2
+  num_epochs: 1
   learning_rate: 0.001
   seed: 123
   model_dim: 16

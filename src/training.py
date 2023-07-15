@@ -113,9 +113,9 @@ class AETrainStep:
         """
         with tf.GradientTape() as tape:
             y_gen, encoded_ypred = self.ae(x_batch, y_pred)
-            rec_loss = tf.reduce_mean(self.bce_with_logits(y_pred, y_gen))
+            rec_loss = tf.reduce_sum(self.bce_with_logits(y_pred, y_gen))
             alpha_prior = self.prior_norm * y_prior + 1.0 + 1.0 / y_gen.shape[-1]
-            dist_loss = self.kld_reg * tf.reduce_mean(
+            dist_loss = self.kld_reg * tf.reduce_sum(
                 kl_divergence(alpha_prior, encoded_ypred)
             )
             loss = rec_loss + dist_loss

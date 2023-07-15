@@ -53,7 +53,7 @@ class CNN(Model):
             ]
         )
         self.output_layer = Dense(n_classes)
-    
+
     @tf.function
     def call(
         self, input_tensor: tf.Tensor, training: bool = False
@@ -122,7 +122,7 @@ class CVAE(Model):
         _, logits = self.forward_encoder(inputs)
         joined = tf.concat([logits, labels], axis=1)
         return self.decoder(joined)
-    
+
     @tf.function
     def call(self, images: tf.Tensor, preds: tf.Tensor) -> tuple[tf.Tensor, tf.Tensor]:
         """

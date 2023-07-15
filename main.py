@@ -13,7 +13,7 @@ from src.dataset import (
     NoiseType,
     load_data,
     get_mean_std,
-    train_val_split,
+    train_val_split_idxs,
     standardize,
     generate_noisy_labels,
     make_dataset,
@@ -21,7 +21,6 @@ from src.dataset import (
 )
 from src.model import CNN, CVAE
 from src.prior import generate_prior
-from src.training import train_classifier, train_npc
 
 cs = ConfigStore.instance()
 cs.store(name="args", node=Args)
@@ -31,7 +30,7 @@ cs.store(name="args", node=Args)
 def main(args: Args):
     np.random.seed(args.training.seed)
 
-    x_train, y_train, _, _ = load_data(args.dataset.name)
+    x_train, y_train, x_test, y_test = load_data(args.dataset.name)
 
     # preprocess data
 
@@ -47,11 +46,8 @@ def main(args: Args):
     y_train_noisy = generate_noisy_labels(0.20, y_train, NoiseType.SYMMETRIC)
 
     # Make datasets
-    x_train, y_train, x_val, y_val = train_val_split(
-        x_train, y_train_noisy, args.dataset.val_frac
-    )
-    train_ds = make_dataset(x_train, y_train, args.dataset.batch_size)
-    val_ds = make_dataset(x_val, y_val, args.dataset.batch_size)
+    train_ds = make_dataset(x_train, y_train_noisy, args.dataset.batch_size)
+    val_ds = make_dataset(x_test, y_test, args.dataset.batch_size)
 
     # Initialize classifier and autoencoder
     classifier = CNN(
@@ -69,22 +65,37 @@ def main(args: Args):
         n_channels=args.dataset.n_channels,
         dropout_p=args.training.dropout_p,
         softplus_beta=args.npc.softplus_beta,
+        kld_reg=args.npc.kld_reg,
+        prior_norm=args.npc.prior_norm,
     )
     loss_func = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
     clf_optimizer = tf.keras.optimizers.Adam(args.training.learning_rate)
-    ae_optimizer = tf.keras.optimizers.Adam(args.training.learning_rate)
-
-    # Train classifier on noisy labels
-    y_pred = train_classifier(
-        model=classifier,
-        optimizer=clf_optimizer,
-        loss_func=loss_func,
-        train_ds=train_ds,
-        val_ds=val_ds,
-        num_epochs=args.training.num_epochs,
-        train_log_dir=Path(args.training.log_dir) / "train",
+    ae_optimizer = tf.keras.optimizers.SGD(
+        learning_rate=args.training.learning_rate, clipnorm=args.npc.clipnorm
     )
 
+    # Train classifier on noisy labels
+    classifier.compile(loss=loss_func, optimizer=clf_optimizer, weighted_metrics=[])
+    
+    tb_callback_clf = tf.keras.callbacks.TensorBoard(
+        log_dir=Path(args.training.log_dir) / "train",
+        histogram_freq=1
+    )
+    classifier.fit(
+        train_ds,
+        validation_data=val_ds,
+        epochs=args.training.num_epochs,
+        callbacks=[tb_callback_clf],
+    )
+
+    # Gather predictions after model training for NPC dataset
+    preds = []
+    for x_batch, _ in train_ds:
+        _, logits = classifier(x_batch)
+        y_pred = tf.argmax(tf.nn.softmax(logits), axis=-1)
+        preds.append(y_pred.numpy())
+    y_pred = np.hstack(preds)
+    
     del train_ds
     gc.collect()
 
@@ -103,19 +114,34 @@ def main(args: Args):
     gc.collect()
 
     # Create dataset for NPC
+    train_idxs, val_idxs = train_val_split_idxs(
+        prior_labels.shape[0], args.dataset.val_frac
+    )
+
     train_npc_ds = make_npc_dataset(
-        x=x_train, y_pred=y_pred, y_prior=prior_labels, batch_size=args.dataset.batch_size
+        x=x_train[train_idxs],
+        y_pred=y_pred[train_idxs],
+        y_prior=prior_labels[train_idxs],
+        batch_size=args.dataset.batch_size,
+    )
+    val_npc_ds = make_npc_dataset(
+        x=x_train[val_idxs],
+        y_pred=y_pred[val_idxs],
+        y_prior=prior_labels[val_idxs],
+        batch_size=args.dataset.batch_size,
     )
 
     # Train NPC
-    train_npc(
-        autoencoder=autoencoder,
-        optimizer=ae_optimizer,
-        train_npc_ds=train_npc_ds,
-        train_log_dir=Path(args.training.log_dir) / "npc_train",
-        num_epochs=args.npc.num_epochs,
-        kld_reg=args.npc.kld_reg,
-        prior_norm=args.npc.prior_norm,
+    tb_callback = tf.keras.callbacks.TensorBoard(
+        log_dir=Path(args.training.log_dir) / "train_npc",
+        histogram_freq=1,
+    )
+    autoencoder.compile(optimizer=ae_optimizer, weighted_metrics=[])
+    autoencoder.fit(
+        train_npc_ds,
+        validation_data=val_npc_ds,
+        epochs=args.npc.num_epochs,
+        callbacks=[tb_callback],
     )
 
 

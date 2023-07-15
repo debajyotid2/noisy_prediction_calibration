@@ -3,7 +3,7 @@ defaults:
   - _self_
 
 training:
-  num_epochs: 2
+  num_epochs: 1
   learning_rate: 0.001
   seed: 123
   model_dim: 16
@@ -16,5 +16,6 @@ npc:
   num_epochs: 10
   kld_reg: 0.5
   prior_norm: 5.0
+  clipnorm: 1.0
 
 

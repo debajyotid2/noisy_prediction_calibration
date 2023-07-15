@@ -67,8 +67,9 @@ def convert_to_one_hot(
     label = tf.one_hot(label, 10)
     return image, tf.cast(label, tf.float32)
 
+
 def convert_to_one_hot_with_prior(
-        image: tf.Tensor, pred: tf.Tensor, prior: tf.Tensor
+    image: tf.Tensor, pred: tf.Tensor, prior: tf.Tensor
 ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
     """
     Convert categorical label to one-hot format for predictions and priors.
@@ -76,6 +77,7 @@ def convert_to_one_hot_with_prior(
     pred = tf.one_hot(pred, 10)
     prior = tf.one_hot(prior, 10)
     return image, tf.cast(pred, tf.float32), tf.cast(prior, tf.float32)
+
 
 def generate_noisy_labels(
     noise_rate: float,
@@ -105,24 +107,17 @@ def generate_noisy_labels(
     return noisy_labels
 
 
-def train_val_split(
-    x_train: np.ndarray[Any, Any], y_train: np.ndarray[Any, Any], val_frac: float = 0.2
-) -> tuple[
-    np.ndarray[Any, Any],
-    np.ndarray[Any, Any],
-    np.ndarray[Any, Any],
-    np.ndarray[Any, Any],
-]:
+def train_val_split_idxs(
+    num_datapoints: int, val_frac: float = 0.2
+) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any]]:
     """
-    Splits the data into training and validation sets according to the
-    supplied fraction of data for validation (val_frac).
+    Generates indices to split data into training and validation sets according
+    to the supplied fraction of data for validation (val_frac).
     """
-    perm_idx = np.random.permutation(x_train.shape[0])
-    val_idx = perm_idx[: int(val_frac * x_train.shape[0])]
-    train_idx = perm_idx[int(val_frac * x_train.shape[0]) :]
-    x_val, y_val = x_train[val_idx], y_train[val_idx]
-    x_train, y_train = x_train[train_idx], y_train[train_idx]
-    return x_train, y_train, x_val, y_val
+    perm_idx = np.random.permutation(num_datapoints)
+    val_idxs = perm_idx[: int(val_frac * num_datapoints)]
+    train_idxs = perm_idx[int(val_frac * num_datapoints) :]
+    return train_idxs, val_idxs
 
 
 def make_dataset(
@@ -161,7 +156,7 @@ def make_npc_dataset(
     logging.debug(f"{len(x) - num_samples} samples discarded.")
 
     dataset = tf.data.Dataset.from_tensor_slices(
-            (x[:num_samples], y_pred[:num_samples], y_prior[:num_samples])
+        (x[:num_samples], y_pred[:num_samples], y_prior[:num_samples])
     ).map(convert_to_one_hot_with_prior, num_parallel_calls=tf.data.AUTOTUNE)
     dataset = dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
     return dataset

@@ -1,7 +1,7 @@
 """
 Basic convolutional network for image classification.
 """
-
+from typing import Callable
 import tensorflow as tf
 from tensorflow.keras import Model
 from tensorflow.keras.layers import (
@@ -99,7 +99,7 @@ class CVAE(Model):
         # loss trackers
         self.rec_loss_tracker = tf.keras.metrics.Mean(name="rec_loss")
         self.dist_loss_tracker = tf.keras.metrics.Mean(name="dist_loss")
-        self.loss_tracker = tf.keras.metrics.Mean(name="train_loss")
+        self.loss_tracker = tf.keras.metrics.Mean(name="loss")
 
         # models
         self.forward_encoder = CNN(
@@ -240,5 +240,5 @@ class CVAE(Model):
         return dict(
             rec_loss=self.rec_loss_tracker.result(),
             dist_loss=self.dist_loss_tracker.result(),
-            val_loss=self.loss_tracker.result(),
+            loss=self.loss_tracker.result(),
         )

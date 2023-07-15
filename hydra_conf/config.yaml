@@ -16,5 +16,6 @@ npc:
   num_epochs: 10
   kld_reg: 0.5
   prior_norm: 5.0
+  clipnorm: 1.0
 
 

@@ -71,7 +71,9 @@ def main(args: Args):
     )
     loss_func = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
     clf_optimizer = tf.keras.optimizers.Adam(args.training.learning_rate)
-    ae_optimizer = tf.keras.optimizers.Adam(args.training.learning_rate)
+    ae_optimizer = tf.keras.optimizers.SGD(
+        learning_rate=args.training.learning_rate, clipnorm=args.npc.clipnorm
+    )
 
     # Train classifier on noisy labels
     y_pred = train_classifier(

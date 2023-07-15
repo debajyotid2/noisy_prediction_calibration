@@ -32,6 +32,7 @@ class NPCArgs:
     num_epochs: int
     kld_reg: float
     prior_norm: float
+    clipnorm: float
 
 
 @dataclass

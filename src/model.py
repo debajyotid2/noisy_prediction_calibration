@@ -40,6 +40,12 @@ class CNN(Model):
     ):
         super().__init__()
         self.dim = dim
+
+        # Loss and accuracy trackers
+        self.loss_tracker = tf.keras.metrics.Mean(name="loss")
+        self.accuracy_tracker = tf.keras.metrics.Mean(name="accuracy")
+
+        # Model
         self.model = tf.keras.Sequential(
             layers=[
                 InputLayer((img_height, img_width, n_channels)),
@@ -54,6 +60,13 @@ class CNN(Model):
         )
         self.output_layer = Dense(n_classes)
 
+    @property
+    def metrics(self) -> list[tf.keras.metrics.Metric]:
+        """
+        Returns list of metrics.
+        """
+        return [self.loss_tracker, self.accuracy_tracker]
+
     @tf.function
     def call(
         self, input_tensor: tf.Tensor, training: bool = False
@@ -64,6 +77,55 @@ class CNN(Model):
         model_out = self.model(input_tensor, training=training)
         logits = self.output_layer(model_out)
         return model_out, logits
+
+    @tf.function
+    def train_step(
+        self, data: tuple[tf.Tensor, tf.Tensor], training: bool = True
+    ) -> dict[str, tf.Tensor]:
+        """
+        Training step.
+        """
+        x_batch, y_batch = data
+
+        with tf.GradientTape() as tape:
+            _, logits = self(x_batch, training=training)
+            loss = self.loss(y_batch, logits)
+        grad = tape.gradient(loss, self.model.trainable_variables)
+        self.optimizer.apply_gradients(zip(grad, self.model.trainable_variables))
+
+        y_pred = tf.argmax(tf.nn.softmax(logits), axis=-1)
+        y_batch = tf.argmax(y_batch, axis=-1)
+        correct = tf.where(y_pred == y_batch, 1.0, 0.0)
+
+        # Update metrics
+        self.loss_tracker.update_state(loss)
+        self.accuracy_tracker.update_state(tf.reduce_mean(correct))
+
+        return dict(
+            train_loss=self.loss_tracker.result(),
+            train_acc=self.accuracy_tracker.result(),
+        )
+
+    @tf.function
+    def test_step(self, data: tuple[tf.Tensor, tf.Tensor]) -> dict[str, tf.Tensor]:
+        """
+        Validation step.
+        """
+        x_batch, y_batch = data
+        _, logits = self(x_batch, training=False)
+        y_pred = tf.argmax(tf.nn.softmax(logits), axis=-1)
+        loss = self.loss(y_batch, logits)
+        y_pred = tf.argmax(tf.nn.softmax(logits), axis=-1)
+        y_batch = tf.argmax(y_batch, axis=-1)
+        correct = tf.where(y_pred == y_batch, 1.0, 0.0)
+
+        # Update metrics
+        self.loss_tracker.update_state(loss)
+        self.accuracy_tracker.update_state(tf.reduce_mean(correct))
+
+        return dict(
+            loss=self.loss_tracker.result(), acc=self.accuracy_tracker.result()
+        )
 
 
 class CVAE(Model):
@@ -195,7 +257,7 @@ class CVAE(Model):
     @tf.function
     def train_step(
         self, data: tuple[tf.Tensor, tf.Tensor, tf.Tensor]
-    ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+    ) -> dict[str, tf.Tensor]:
         """
         Training step.
         """
@@ -222,7 +284,7 @@ class CVAE(Model):
     @tf.function
     def test_step(
         self, data: tuple[tf.Tensor, tf.Tensor, tf.Tensor]
-    ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+    ) -> dict[str, tf.Tensor]:
         """
         Evaluation step.
         """

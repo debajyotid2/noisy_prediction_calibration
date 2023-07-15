@@ -76,16 +76,27 @@ def main(args: Args):
     )
 
     # Train classifier on noisy labels
-    y_pred = train_classifier(
-        model=classifier,
-        optimizer=clf_optimizer,
-        loss_func=loss_func,
-        train_ds=train_ds,
-        val_ds=val_ds,
-        num_epochs=args.training.num_epochs,
-        train_log_dir=Path(args.training.log_dir) / "train",
+    classifier.compile(loss=loss_func, optimizer=clf_optimizer, weighted_metrics=[])
+    
+    tb_callback_clf = tf.keras.callbacks.TensorBoard(
+        log_dir=Path(args.training.log_dir) / "train",
+        histogram_freq=1
+    )
+    classifier.fit(
+        train_ds,
+        validation_data=val_ds,
+        epochs=args.training.num_epochs,
+        callbacks=[tb_callback_clf],
     )
 
+    # Gather predictions after model training for NPC dataset
+    preds = []
+    for x_batch, _ in train_ds:
+        _, logits = classifier(x_batch)
+        y_pred = tf.argmax(tf.nn.softmax(logits), axis=-1)
+        preds.append(y_pred.numpy())
+    y_pred = np.hstack(preds)
+    
     del train_ds
     gc.collect()
 

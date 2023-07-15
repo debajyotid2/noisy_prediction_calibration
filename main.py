@@ -21,7 +21,6 @@ from src.dataset import (
 )
 from src.model import CNN, CVAE
 from src.prior import generate_prior
-from src.training import train_classifier
 
 cs = ConfigStore.instance()
 cs.store(name="args", node=Args)

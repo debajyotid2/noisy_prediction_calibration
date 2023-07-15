@@ -12,19 +12,6 @@ import tensorflow as tf
 
 logging.getLogger(__name__)
 
-
-def kl_divergence(alpha_prior: tf.Tensor, alpha_inferred: tf.Tensor):
-    """
-    KL divergence loss.
-    """
-    kld = (
-        tf.math.lgamma(alpha_prior)
-        - tf.math.lgamma(alpha_inferred)
-        + (alpha_inferred - alpha_prior) * tf.math.digamma(alpha_inferred)
-    )
-    return tf.reduce_sum(kld, axis=1)
-
-
 class ClassifierTrainStep:
     """
     Training step tf function for classifier.
@@ -82,47 +69,6 @@ class ClassifierValidationStep:
         y_batch = tf.argmax(y_batch, axis=-1)
         correct = tf.where(y_pred == y_batch, 1.0, 0.0)
         return loss, tf.reduce_sum(correct)
-
-
-class AETrainStep:
-    """
-    Training step tf function for autoencoder.
-    """
-
-    def __init__(
-        self,
-        autoencoder: tf.keras.Model,
-        optimizer: tf.keras.optimizers.Optimizer,
-        kld_reg: float,
-        prior_norm: float,
-    ):
-        self.ae = autoencoder
-        self.optimizer = optimizer
-        self.bce_with_logits = tf.keras.losses.BinaryCrossentropy(
-            from_logits=True, reduction=tf.keras.losses.Reduction.NONE
-        )
-        self.kld_reg = kld_reg
-        self.prior_norm = prior_norm
-
-    @tf.function
-    def __call__(
-        self, x_batch: tf.Tensor, y_pred: tf.Tensor, y_prior: tf.Tensor
-    ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
-        """
-        Training step.
-        """
-        with tf.GradientTape() as tape:
-            y_gen, encoded_ypred = self.ae(x_batch, y_pred)
-            rec_loss = tf.reduce_sum(self.bce_with_logits(y_pred, y_gen))
-            alpha_prior = self.prior_norm * y_prior + 1.0 + 1.0 / y_gen.shape[-1]
-            dist_loss = self.kld_reg * tf.reduce_sum(
-                kl_divergence(alpha_prior, encoded_ypred)
-            )
-            loss = rec_loss + dist_loss
-        grad = tape.gradient(loss, self.ae.trainable_variables)
-        self.optimizer.apply_gradients(zip(grad, self.ae.trainable_variables))
-        return loss, rec_loss, dist_loss
-
 
 def train_classifier(
     *,
@@ -189,50 +135,3 @@ def train_classifier(
         y_pred = tf.argmax(tf.nn.softmax(logits), axis=-1)
         preds.append(y_pred.numpy())
     return np.hstack(preds)
-
-
-def train_npc(
-    *,
-    autoencoder: tf.keras.Model,
-    optimizer: tf.keras.optimizers.Optimizer,
-    train_npc_ds: tf.data.Dataset,
-    train_log_dir: Path,
-    num_epochs: int = 1,
-    kld_reg: float = 1.0,
-    prior_norm: float = 5.0,
-):
-    """
-    Training algorithm for the noisy prediction calibration algorithm.
-    """
-    # Tensorboard logging
-    train_summary_writer = tf.summary.create_file_writer(str(train_log_dir))
-
-    train_step = AETrainStep(autoencoder, optimizer, kld_reg, prior_norm)
-    for epoch in range(num_epochs):
-        train_loss = 0.0
-        rec_loss_train = 0.0
-        dist_loss_train = 0.0
-        rec_losses = []
-        dist_losses = []
-        for x_batch, y_pred, y_prior in train_npc_ds:
-            # Generate alpha prior
-            loss, rec_loss, dist_loss = train_step(x_batch, y_pred, y_prior)
-            train_loss += loss
-            rec_loss_train += rec_loss
-            dist_loss_train += dist_loss
-            rec_losses.append(rec_loss)
-            dist_losses.append(dist_loss)
-        breakpoint()
-
-        # Log metrics
-        with train_summary_writer.as_default():
-            tf.summary.scalar("train_loss", train_loss, step=epoch)
-            tf.summary.scalar("rec_loss", rec_loss_train, step=epoch)
-            tf.summary.scalar("dist_loss", dist_loss_train, step=epoch)
-
-        logging.info(
-            f"Epoch [{epoch+1}/{num_epochs}],"
-            f" train loss: {train_loss:.4f},"
-            f" reconstruction loss: {rec_loss_train:.4f},"
-            f" distribution loss: {dist_loss_train:.4f},"
-        )

@@ -1,6 +1,8 @@
 """
 Basic convolutional network for image classification.
 """
+
+from typing import Any, Callable
 import tensorflow as tf
 from tensorflow.keras import Model
 from tensorflow.keras.layers import (
@@ -313,3 +315,57 @@ class CVAE(Model):
             dist_loss=self.dist_loss_tracker.result(),
             loss=self.loss_tracker.result(),
         )
+
+
+class ClassifierPostprocessorEnsemble(Model):
+    """
+    Final ensemble of classifier and post-processor that is used
+    to generate predictions.
+    """
+
+    def __init__(
+        self,
+        classifier: tf.keras.Model,
+        post_processor: Callable[Any, Any],
+        n_classes: int = 10,
+    ):
+        super().__init__()
+        self.classifier = classifier
+        self.post_processor = post_processor
+        self.n_classes = n_classes
+
+    def call(self, inputs: Any, training: bool = False) -> tf.Tensor:
+        """
+        Call method.
+        """
+        x_batch, _, _ = inputs
+        batch_size = tf.shape(x_batch)[0]
+
+        # Calculate p(y_hat | x)
+        _, logits = self.classifier(x_batch, training=training)
+        probs = tf.nn.softmax(logits)
+
+        # Calculate p(y| y_hat, x)
+        ae_probs = tf.Variable(
+            tf.zeros(shape=(batch_size, self.n_classes, self.n_classes))
+        )
+        for class_val in range(self.n_classes):
+            labels = class_val * tf.ones(shape=(batch_size,), dtype=tf.int32)
+            labels_one_hot = tf.one_hot(labels, self.n_classes)
+            labels_one_hot = tf.cast(labels_one_hot, tf.float32)
+
+            _, alpha_inferred = self.post_processor((x_batch, labels_one_hot))
+            alpha_inferred -= 1.0
+            ae_probs[:, :, class_val].assign(
+                alpha_inferred
+                / tf.reshape(tf.reduce_sum(alpha_inferred, axis=1), shape=(-1, 1))
+            )
+
+        # Reshape probs to match dimensions of ae_probs
+        probs = tf.expand_dims(probs, axis=1)
+        probs = tf.repeat(probs, self.n_classes, axis=1)
+
+        # Generate final labels
+        final_probs = ae_probs * probs
+        pseudolabels = tf.argmax(tf.reduce_sum(final_probs, axis=2), axis=1)
+        return pseudolabels

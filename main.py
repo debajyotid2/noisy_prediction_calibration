@@ -26,8 +26,7 @@ from src.prior import generate_prior
 cs = ConfigStore.instance()
 cs.store(name="args", node=Args)
 
-logging.basicConfig(format="%(asctime)s-%(levelname)s: %(message)s",
-                    level=logging.INFO)
+logging.basicConfig(format="%(asctime)s-%(levelname)s: %(message)s", level=logging.INFO)
 
 
 @hydra.main(config_path="./hydra_conf", config_name="config", version_base="1.3")
@@ -56,7 +55,9 @@ def main(args: Args):
     x_test = (x_test - np.min(x_test)) / (np.max(x_test) - np.min(x_test))
 
     # generate noisy labels
-    y_train_noisy = generate_noisy_labels(args.npc.noise_rate, y_train, NoiseType.SYMMETRIC)
+    y_train_noisy = generate_noisy_labels(
+        args.npc.noise_rate, y_train, NoiseType.SYMMETRIC
+    )
 
     # Make datasets
     train_ds = make_dataset(x_train, y_train_noisy, y_train, args.dataset.batch_size)
@@ -93,11 +94,17 @@ def main(args: Args):
     tb_callback_clf = tf.keras.callbacks.TensorBoard(
         log_dir=Path(args.training.log_dir) / "train", histogram_freq=1
     )
+    save_callback_clf = tf.keras.callbacks.ModelCheckpoint(
+        filepath=str(Path(args.training.log_dir) / "classifier"),
+        monitor="val_loss",
+        save_best_only=True,
+        save_weights_only=True,
+    )
     classifier.fit(
         train_ds,
         validation_data=test_ds,
         epochs=args.training.num_epochs,
-        callbacks=[tb_callback_clf],
+        callbacks=[tb_callback_clf, save_callback_clf],
     )
 
     # Gather predictions after model training for NPC dataset
@@ -109,7 +116,18 @@ def main(args: Args):
     y_pred = np.hstack(preds)
 
     del train_ds
+    del classifier
     gc.collect()
+
+    # Load best saved classifier
+    classifier = CNN(
+        n_classes=args.dataset.n_classes,
+        dim=args.training.model_dim,
+        img_height=args.dataset.img_height,
+        img_width=args.dataset.img_width,
+        n_channels=args.dataset.n_channels,
+    )
+    classifier.load_weights(Path(args.training.log_dir) / "classifier")
 
     # Create dataset for prior generation
     train_pred_ds = make_dataset(x_train, y_pred, y_pred, args.dataset.batch_size)

@@ -108,7 +108,7 @@ def main(args: Args):
     gc.collect()
 
     # Create dataset for prior generation
-    train_pred_ds = make_dataset(x_train, y_pred, args.dataset.batch_size)
+    train_pred_ds = make_dataset(x_train, y_pred, y_pred, args.dataset.batch_size)
 
     # Generate prior
     prior_labels, prior_probabilities = generate_prior(

@@ -1,7 +1,6 @@
 """
 Basic convolutional network for image classification.
 """
-from typing import Callable
 import tensorflow as tf
 from tensorflow.keras import Model
 from tensorflow.keras.layers import (
@@ -43,7 +42,8 @@ class CNN(Model):
 
         # Loss and accuracy trackers
         self.loss_tracker = tf.keras.metrics.Mean(name="loss")
-        self.accuracy_tracker = tf.keras.metrics.Mean(name="accuracy")
+        self.accuracy_metric_noisy = tf.keras.metrics.Accuracy(name="accuracy_noisy")
+        self.accuracy_metric_clean = tf.keras.metrics.Accuracy(name="accuracy_clean")
 
         # Model
         self.model = tf.keras.Sequential(
@@ -65,7 +65,11 @@ class CNN(Model):
         """
         Returns list of metrics.
         """
-        return [self.loss_tracker, self.accuracy_tracker]
+        return [
+            self.loss_tracker,
+            self.accuracy_metric_noisy,
+            self.accuracy_metric_clean,
+        ]
 
     @tf.function
     def call(
@@ -80,51 +84,56 @@ class CNN(Model):
 
     @tf.function
     def train_step(
-        self, data: tuple[tf.Tensor, tf.Tensor], training: bool = True
+        self, data: tuple[tf.Tensor, tf.Tensor, tf.Tensor], training: bool = True
     ) -> dict[str, tf.Tensor]:
         """
         Training step.
         """
-        x_batch, y_batch = data
+        x_batch, y_batch_noisy, y_batch_clean = data
 
         with tf.GradientTape() as tape:
             _, logits = self(x_batch, training=training)
-            loss = self.loss(y_batch, logits)
+            loss = self.loss(y_batch_noisy, logits)
         grad = tape.gradient(loss, self.model.trainable_variables)
         self.optimizer.apply_gradients(zip(grad, self.model.trainable_variables))
 
-        y_pred = tf.argmax(tf.nn.softmax(logits), axis=-1)
-        y_batch = tf.argmax(y_batch, axis=-1)
-        correct = tf.where(y_pred == y_batch, 1.0, 0.0)
+        y_pred = tf.argmax(logits, axis=-1)
+        y_noisy = tf.argmax(y_batch_noisy, axis=-1)
 
         # Update metrics
         self.loss_tracker.update_state(loss)
-        self.accuracy_tracker.update_state(tf.reduce_mean(correct))
+        self.accuracy_metric_noisy.update_state(y_pred, y_noisy)
+        self.accuracy_metric_clean.update_state(y_pred, y_batch_clean)
 
         return dict(
             train_loss=self.loss_tracker.result(),
-            train_acc=self.accuracy_tracker.result(),
+            train_acc_noisy=self.accuracy_metric_noisy.result(),
+            train_acc_clean=self.accuracy_metric_clean.result(),
         )
 
     @tf.function
-    def test_step(self, data: tuple[tf.Tensor, tf.Tensor]) -> dict[str, tf.Tensor]:
+    def test_step(
+        self, data: tuple[tf.Tensor, tf.Tensor, tf.Tensor]
+    ) -> dict[str, tf.Tensor]:
         """
         Validation step.
         """
-        x_batch, y_batch = data
+        x_batch, y_batch_noisy, y_batch_clean = data
         _, logits = self(x_batch, training=False)
-        y_pred = tf.argmax(tf.nn.softmax(logits), axis=-1)
-        loss = self.loss(y_batch, logits)
-        y_pred = tf.argmax(tf.nn.softmax(logits), axis=-1)
-        y_batch = tf.argmax(y_batch, axis=-1)
-        correct = tf.where(y_pred == y_batch, 1.0, 0.0)
+        y_pred = tf.argmax(logits, axis=-1)
+        loss = self.loss(y_batch_noisy, logits)
+        y_pred = tf.argmax(logits, axis=-1)
+        y_noisy = tf.argmax(y_batch_noisy, axis=-1)
 
         # Update metrics
         self.loss_tracker.update_state(loss)
-        self.accuracy_tracker.update_state(tf.reduce_mean(correct))
+        self.accuracy_metric_noisy.update_state(y_pred, y_noisy)
+        self.accuracy_metric_clean.update_state(y_pred, y_batch_clean)
 
         return dict(
-            loss=self.loss_tracker.result(), acc=self.accuracy_tracker.result()
+            loss=self.loss_tracker.result(),
+            acc_noisy=self.accuracy_metric_noisy.result(),
+            acc_clean=self.accuracy_metric_clean.result(),
         )
 
 

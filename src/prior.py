@@ -32,12 +32,12 @@ def generate_prior(
     len_train = 0
 
     # Get classifier predictions
-    for x_batch, labels in dataset:
+    for x_batch, y_preds, _ in dataset:
         len_train += x_batch.shape[0]
         # Make class to idx hash map
         class_idx_dict = dict.fromkeys(list(range(n_classes)), list())
-        for idx, label in enumerate(labels):
-            label = tf.argmax(label, axis=-1)
+        for idx, y_pred in enumerate(y_preds):
+            label = tf.argmax(y_pred, axis=-1)
             class_idx_dict[label.numpy()].append(idx)
 
         # Get embeddings and logits
@@ -69,7 +69,7 @@ def generate_prior(
     # NOTE: New embeddings must be generated for prediction
     start_time = perf_counter()
     embeddings = np.zeros((len_train, int(classifier.dim**2.0)))
-    for idx, (x_batch, _) in enumerate(dataset):
+    for idx, (x_batch, _, _) in enumerate(dataset):
         img_emb, _ = classifier(x_batch)
         embeddings[
             idx * x_batch.shape[0] : (idx + 1) * x_batch.shape[0]

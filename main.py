@@ -38,16 +38,25 @@ def main(args: Args):
     x_train = x_train.reshape(
         -1, args.dataset.img_height, args.dataset.img_width, args.dataset.n_channels
     )
+    x_test = x_test.reshape(
+        -1, args.dataset.img_height, args.dataset.img_width, args.dataset.n_channels
+    )
+
     x_train = x_train.astype(np.float32) / 255.0
     mean, std = get_mean_std(x_train)
     x_train = standardize(x_train, mean, std)
+    x_train = (x_train - np.min(x_train)) / (np.max(x_train) - np.min(x_train))
+
+    x_test = x_test.astype(np.float32) / 255.0
+    x_test = standardize(x_test, mean, std)
+    x_test = (x_test - np.min(x_test)) / (np.max(x_test) - np.min(x_test))
 
     # generate noisy labels
     y_train_noisy = generate_noisy_labels(0.20, y_train, NoiseType.SYMMETRIC)
 
     # Make datasets
-    train_ds = make_dataset(x_train, y_train_noisy, args.dataset.batch_size)
-    val_ds = make_dataset(x_test, y_test, args.dataset.batch_size)
+    train_ds = make_dataset(x_train, y_train_noisy, y_train, args.dataset.batch_size)
+    val_ds = make_dataset(x_test, y_test, y_test, args.dataset.batch_size)
 
     # Initialize classifier and autoencoder
     classifier = CNN(
@@ -76,10 +85,9 @@ def main(args: Args):
 
     # Train classifier on noisy labels
     classifier.compile(loss=loss_func, optimizer=clf_optimizer, weighted_metrics=[])
-    
+
     tb_callback_clf = tf.keras.callbacks.TensorBoard(
-        log_dir=Path(args.training.log_dir) / "train",
-        histogram_freq=1
+        log_dir=Path(args.training.log_dir) / "train", histogram_freq=1
     )
     classifier.fit(
         train_ds,
@@ -90,17 +98,17 @@ def main(args: Args):
 
     # Gather predictions after model training for NPC dataset
     preds = []
-    for x_batch, _ in train_ds:
+    for x_batch, _, _ in train_ds:
         _, logits = classifier(x_batch)
-        y_pred = tf.argmax(tf.nn.softmax(logits), axis=-1)
+        y_pred = tf.argmax(logits, axis=-1)
         preds.append(y_pred.numpy())
     y_pred = np.hstack(preds)
-    
+
     del train_ds
     gc.collect()
 
     # Create dataset for prior generation
-    train_pred_ds = make_dataset(x_train, y_pred, args.dataset.batch_size)
+    train_pred_ds = make_dataset(x_train, y_pred, y_pred, args.dataset.batch_size)
 
     # Generate prior
     prior_labels, prior_probabilities = generate_prior(

@@ -3,7 +3,7 @@ defaults:
   - _self_
 
 training:
-  num_epochs: 1
+  num_epochs: 200
   learning_rate: 0.001
   seed: 123
   model_dim: 16
@@ -14,7 +14,7 @@ npc:
   softplus_beta: 1.0
   n_neighbors: 10
   num_epochs: 10
-  kld_reg: 0.5
+  kld_reg: 1.0
   prior_norm: 5.0
   clipnorm: 1.0
 

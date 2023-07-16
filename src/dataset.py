@@ -59,13 +59,13 @@ def standardize(
 
 
 def convert_to_one_hot(
-    image: tf.Tensor, label: tf.Tensor
-) -> tuple[tf.Tensor, tf.Tensor]:
+    image: tf.Tensor, noisy_label: tf.Tensor, clean_label: tf.Tensor
+) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
     """
     Convert categorical label to one-hot format.
     """
-    label = tf.one_hot(label, 10)
-    return image, tf.cast(label, tf.float32)
+    noisy_label = tf.one_hot(noisy_label, 10)
+    return image, tf.cast(noisy_label, tf.float32), tf.cast(clean_label, tf.float32)
 
 
 def convert_to_one_hot_with_prior(
@@ -122,7 +122,8 @@ def train_val_split_idxs(
 
 def make_dataset(
     x: np.ndarray[Any, Any],
-    y: np.ndarray[Any, Any],
+    y_noisy: np.ndarray[Any, Any],
+    y_clean: np.ndarray[Any, Any],
     batch_size: int = 32,
 ) -> tf.data.Dataset:
     """
@@ -134,7 +135,7 @@ def make_dataset(
     logging.debug(f"{len(x) - num_samples} samples discarded.")
 
     dataset = tf.data.Dataset.from_tensor_slices(
-        (x[:num_samples], y[:num_samples])
+        (x[:num_samples], y_noisy[:num_samples], y_clean[:num_samples])
     ).map(convert_to_one_hot, num_parallel_calls=tf.data.AUTOTUNE)
     dataset = dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
     return dataset

@@ -17,5 +17,3 @@ npc:
   kld_reg: 1.0
   prior_norm: 5.0
   clipnorm: 1.0
-
-

@@ -1,6 +1,7 @@
 """
 Variational autoencoder.
 """
+import logging
 import gc
 from pathlib import Path
 import hydra
@@ -19,11 +20,14 @@ from src.dataset import (
     make_dataset,
     make_npc_dataset,
 )
-from src.model import CNN, CVAE
+from src.model import CNN, CVAE, ClassifierPostprocessorEnsemble
 from src.prior import generate_prior
 
 cs = ConfigStore.instance()
 cs.store(name="args", node=Args)
+
+logging.basicConfig(format="%(asctime)s-%(levelname)s: %(message)s",
+                    level=logging.INFO)
 
 
 @hydra.main(config_path="./hydra_conf", config_name="config", version_base="1.3")
@@ -56,7 +60,7 @@ def main(args: Args):
 
     # Make datasets
     train_ds = make_dataset(x_train, y_train_noisy, y_train, args.dataset.batch_size)
-    val_ds = make_dataset(x_test, y_test, y_test, args.dataset.batch_size)
+    test_ds = make_dataset(x_test, y_test, y_test, args.dataset.batch_size)
 
     # Initialize classifier and autoencoder
     classifier = CNN(
@@ -91,7 +95,7 @@ def main(args: Args):
     )
     classifier.fit(
         train_ds,
-        validation_data=val_ds,
+        validation_data=test_ds,
         epochs=args.training.num_epochs,
         callbacks=[tb_callback_clf],
     )
@@ -118,7 +122,6 @@ def main(args: Args):
         n_neighbors=args.npc.n_neighbors,
     )
     del train_pred_ds
-    del classifier
     gc.collect()
 
     # Create dataset for NPC
@@ -151,6 +154,17 @@ def main(args: Args):
         epochs=args.npc.num_epochs,
         callbacks=[tb_callback],
     )
+
+    # Evaluate final ensemble
+    final_accuracy = 0.0
+    ensemble = ClassifierPostprocessorEnsemble(
+        classifier, autoencoder, args.dataset.n_classes
+    )
+    for x_batch, _, y_label in test_ds:
+        preds = ensemble((x_batch, y_label, y_label))
+        preds = tf.cast(preds, tf.float32)
+        final_accuracy += tf.reduce_sum(tf.where(preds == y_label, 1.0, 0.0))
+    logging.info(f"Accuracy = {final_accuracy / x_test.shape[0] * 100.0:.2f} %")
 
 
 if __name__ == "__main__":

@@ -27,6 +27,7 @@ class DatasetArgs:
 
 @dataclass
 class NPCArgs:
+    noise_rate: float
     softplus_beta: float
     n_neighbors: int
     num_epochs: int

@@ -56,7 +56,7 @@ def main(args: Args):
     x_test = (x_test - np.min(x_test)) / (np.max(x_test) - np.min(x_test))
 
     # generate noisy labels
-    y_train_noisy = generate_noisy_labels(0.20, y_train, NoiseType.SYMMETRIC)
+    y_train_noisy = generate_noisy_labels(args.npc.noise_rate, y_train, NoiseType.SYMMETRIC)
 
     # Make datasets
     train_ds = make_dataset(x_train, y_train_noisy, y_train, args.dataset.batch_size)

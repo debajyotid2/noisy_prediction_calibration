@@ -137,6 +137,8 @@ def _generate_instance_dependent_noise(
     """
     Generates instance dependent noise.
     """
+    rng = np.random.default_rng()
+    
     images = np.copy(x)
     noisy_labels = np.copy(y_gt)
     flip_rates = truncnorm.rvs(
@@ -152,7 +154,7 @@ def _generate_instance_dependent_noise(
     for i in range(y_gt.shape[0]):
         if i not in noisy_label_idxs:
             continue
-        p = images[i].reshape(1, -1) @ np.squeeze(dim_weights[y_gt[i]], axis=0)
+        p = images[i].reshape(1, -1) @ dim_weights[y_gt[i]]
         p = np.squeeze(p, axis=0)
 
         p[y_gt[i]] = -inf

@@ -59,7 +59,7 @@ def main(args: Args):
         noise_rate=args.npc.noise_rate,
         x=x_train,
         y_gt=y_train,
-        noise_mode=NoiseType.SYMMETRIC,
+        noise_mode=NoiseType.INSTANCE_DEPENDENT,
         dataset_name=args.dataset.name
     )
 

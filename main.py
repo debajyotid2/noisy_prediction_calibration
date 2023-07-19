@@ -59,8 +59,9 @@ def main(args: Args):
         noise_rate=args.npc.noise_rate,
         x=x_train,
         y_gt=y_train,
+        cache_path=Path(args.training.cache_dir),
         noise_mode=NoiseType.INSTANCE_DEPENDENT,
-        dataset_name=args.dataset.name
+        dataset_name=args.dataset.name,
     )
 
     # Make datasets
@@ -142,6 +143,7 @@ def main(args: Args):
         dataset=train_pred_ds,
         n_classes=args.dataset.n_classes,
         n_neighbors=args.npc.n_neighbors,
+        cache_dir=Path(args.training.cache_dir)
     )
     del train_pred_ds
     gc.collect()

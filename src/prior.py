@@ -3,11 +3,12 @@ Prior generation.
 """
 import logging
 from typing import Any
+from pathlib import Path
 from time import perf_counter
 import numpy as np
 import tensorflow as tf
 from sklearn.neighbors import KNeighborsClassifier
-
+from . import npz_ops
 
 logging.getLogger(__name__)
 
@@ -18,11 +19,20 @@ def generate_prior(
     dataset: tf.data.Dataset,
     n_classes: int,
     n_neighbors: int = 10,
+    cache_dir: Path
 ) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any]]:
     """
     Generates prior using KNN. Dataset must have images and predicted labels.
     (y hat)
     """
+    prob_cache_path = cache_dir / "knn_probs.npz"
+    
+    # Load from saved cache if it exists
+    if prob_cache_path.exists():
+        padded = npz_ops.load_from_npz(cache_dir / "knn_probs.npz")
+        output_labels = np.argmax(padded, axis=-1)
+        return output_labels, padded
+
     start_time = perf_counter()
 
     knn = KNeighborsClassifier(n_neighbors=n_neighbors, weights="distance")
@@ -79,10 +89,12 @@ def generate_prior(
     
     start_time = perf_counter()
     output_probs = knn.predict_proba(embeddings)
-    output_labels = np.argmax(output_probs, axis=-1)
     padded = np.zeros((output_probs.shape[0], n_classes))
     padded[:, knn.classes_] = output_probs
+    output_labels = np.argmax(padded, axis=-1)
 
     logging.info(f"Prior generated in {(perf_counter() - start_time)/60:.2f} minutes.")
+
+    npz_ops.compress_to_npz(padded, prob_cache_path)
 
     return output_labels, padded

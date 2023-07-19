@@ -4,10 +4,12 @@ Functions for preprocessing and transforming image datasets.
 from enum import Enum, auto
 import logging
 from typing import Any
+from pathlib import Path
 from math import inf
 import numpy as np
 import tensorflow as tf
 from scipy.stats import truncnorm
+from . import npz_ops
 
 logging.getLogger(__name__)
 
@@ -35,10 +37,10 @@ class NoiseType(Enum):
     Class for different noisy types.
     """
 
-    SYMMETRIC = auto()
-    ASYMMETRIC = auto()
-    INSTANCE_DEPENDENT = auto()
-    SIMILARITY_REFLECTED = auto()
+    SYMMETRIC = "symmetric"
+    ASYMMETRIC = "asymmetric"
+    INSTANCE_DEPENDENT = "idn"
+    SIMILARITY_REFLECTED = "sridn"
 
 
 def get_mean_std(
@@ -96,6 +98,7 @@ def _generate_symmetric_noise(
     y_gt: np.ndarray[Any, Any],
     noise_rate: float,
     noisy_label_idxs: np.ndarray[Any, Any],
+    sridn_cls_prob_path: Path,
     transition: dict[int, int] = TRANSITION_MNIST,
     num_classes: int = 10,
 ) -> np.ndarray[Any, Any]:
@@ -114,6 +117,7 @@ def _generate_asymmetric_noise(
     y_gt: np.ndarray[Any, Any],
     noise_rate: float,
     noisy_label_idxs: np.ndarray[Any, Any],
+    sridn_cls_prob_path: Path,
     transition: dict[int, int] = TRANSITION_MNIST,
     num_classes: int = 10,
 ) -> np.ndarray[Any, Any]:
@@ -131,6 +135,7 @@ def _generate_instance_dependent_noise(
     y_gt: np.ndarray[Any, Any],
     noise_rate: float,
     noisy_label_idxs: np.ndarray[Any, Any],
+    sridn_cls_prob_path: Path,
     transition: dict[int, int] = TRANSITION_MNIST,
     num_classes: int = 10,
 ) -> np.ndarray[Any, Any]:
@@ -138,7 +143,7 @@ def _generate_instance_dependent_noise(
     Generates instance dependent noise.
     """
     rng = np.random.default_rng()
-    
+
     images = np.copy(x)
     noisy_labels = np.copy(y_gt)
     flip_rates = truncnorm.rvs(
@@ -169,13 +174,22 @@ def _generate_sr_instance_dependent_noise(
     y_gt: np.ndarray[Any, Any],
     noise_rate: float,
     noisy_label_idxs: np.ndarray[Any, Any],
+    sridn_cls_prob_path: Path,
     transition: dict[int, int] = TRANSITION_MNIST,
     num_classes: int = 10,
 ) -> np.ndarray[Any, Any]:
     """
     Generates similarity reflected instance dependent noise.
     """
-    return np.copy(y_gt)
+
+    noisy_labels = np.copy(y_gt)
+    if not sridn_cls_prob_path.exists():
+        raise RuntimeError(f"{sridn_cls_prob_path.resolve()} does not exist.")
+    probs_classifier = npz_ops.load_from_npz(sridn_cls_prob_path)
+    cls_pred_idxs = np.argsort(np.max(probs_classifier, axis=-1))
+    noisy_label_idxs = cls_pred_idxs[: int(noise_rate * len(cls_pred_idxs))]
+    noisy_labels[noisy_label_idxs] = np.argmax(probs_classifier[noisy_label_idxs])
+    return noisy_labels
 
 
 """
@@ -194,6 +208,7 @@ def generate_noisy_labels(
     noise_rate: float,
     x: np.ndarray[Any, Any],
     y_gt: np.ndarray[Any, Any],
+    cache_path: Path,
     noise_mode: NoiseType = NoiseType.SYMMETRIC,
     dataset_name: str = "mnist",
     num_classes: int = 10,
@@ -209,9 +224,21 @@ def generate_noisy_labels(
 
     noisy_label_idxs = idxs[: int(noise_rate * len(y_gt))]
 
-    noisy_labels = _NOISY_LABEL_GEN[noise_mode](
-        x, y_gt, noise_rate, noisy_label_idxs, _TRANSITIONS[dataset_name], num_classes
-    )
+    noisy_lbl_path = cache_path / f"{dataset_name}-{noise_mode.value}-noisy.npz"
+    if noisy_lbl_path.exists():
+        noisy_labels = npz_ops.load_from_npz(noisy_lbl_path)
+    else:
+        noisy_labels = _NOISY_LABEL_GEN[noise_mode](
+            x,
+            y_gt,
+            noise_rate,
+            noisy_label_idxs,
+            cache_path / "sridn_cls_probs.npz",
+            _TRANSITIONS[dataset_name],
+            num_classes,
+        )
+        cache_path.mkdir(exist_ok=True)
+        npz_ops.compress_to_npz(noisy_labels, noisy_lbl_path)
 
     return noisy_labels
 

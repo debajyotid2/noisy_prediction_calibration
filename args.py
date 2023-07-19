@@ -12,6 +12,7 @@ class TrainingArgs:
     log_dir: str
     model_dim: int
     dropout_p: float
+    cache_dir: str
 
 
 @dataclass

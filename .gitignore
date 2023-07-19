@@ -1,6 +1,7 @@
-# Tensorflow logs and hydra outputs
+# Tensorflow logs, hydra outputs and data cache dir
 logs/
 outputs/
+cache/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

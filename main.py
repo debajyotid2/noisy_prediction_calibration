@@ -56,7 +56,11 @@ def main(args: Args):
 
     # generate noisy labels
     y_train_noisy = generate_noisy_labels(
-        args.npc.noise_rate, y_train, NoiseType.SYMMETRIC
+        noise_rate=args.npc.noise_rate,
+        x=x_train,
+        y_gt=y_train,
+        noise_mode=NoiseType.SYMMETRIC,
+        dataset_name=args.dataset.name
     )
 
     # Make datasets

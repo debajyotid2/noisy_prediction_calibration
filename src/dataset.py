@@ -4,8 +4,10 @@ Functions for preprocessing and transforming image datasets.
 from enum import Enum, auto
 import logging
 from typing import Any
+from math import inf
 import numpy as np
 import tensorflow as tf
+from scipy.stats import truncnorm
 
 logging.getLogger(__name__)
 
@@ -17,7 +19,15 @@ DATASETS = {
 }
 
 # Class transition matrix for asymmetric noise
-TRANSITION = {0: 0, 2: 0, 4: 7, 7: 7, 1: 1, 9: 1, 3: 5, 5: 3, 6: 6, 8: 8}
+TRANSITION_MNIST = {0: 0, 1: 1, 2: 7, 3: 8, 4: 4, 5: 6, 6: 5, 7: 7, 8: 8, 9: 9}
+TRANSITION_FMNIST = {0: 6, 1: 1, 2: 4, 3: 3, 4: 4, 5: 7, 6: 6, 7: 7, 8: 8, 9: 9}
+TRANSITION_CIFAR10 = {0: 0, 1: 1, 2: 0, 3: 5, 4: 7, 5: 3, 6: 6, 7: 7, 8: 8, 9: 1}
+
+_TRANSITIONS = {
+    "mnist": TRANSITION_MNIST,
+    "cifar10": TRANSITION_CIFAR10,
+    "fashion mnist": TRANSITION_FMNIST,
+}
 
 
 class NoiseType(Enum):
@@ -27,6 +37,8 @@ class NoiseType(Enum):
 
     SYMMETRIC = auto()
     ASYMMETRIC = auto()
+    INSTANCE_DEPENDENT = auto()
+    SIMILARITY_REFLECTED = auto()
 
 
 def get_mean_std(
@@ -79,11 +91,110 @@ def convert_to_one_hot_with_prior(
     return image, tf.cast(pred, tf.float32), tf.cast(prior, tf.float32)
 
 
-def generate_noisy_labels(
+def _generate_symmetric_noise(
+    x: np.ndarray[Any, Any],
+    y_gt: np.ndarray[Any, Any],
     noise_rate: float,
-    gt_labels: np.ndarray[Any, Any],
+    noisy_label_idxs: np.ndarray[Any, Any],
+    transition: dict[int, int] = TRANSITION_MNIST,
+    num_classes: int = 10,
+) -> np.ndarray[Any, Any]:
+    """
+    Generates symmetric noise.
+    """
+    noisy_labels = np.copy(y_gt)
+    noisy_labels[noisy_label_idxs] = np.random.randint(
+        0, num_classes, size=noisy_label_idxs.shape
+    )
+    return noisy_labels
+
+
+def _generate_asymmetric_noise(
+    x: np.ndarray[Any, Any],
+    y_gt: np.ndarray[Any, Any],
+    noise_rate: float,
+    noisy_label_idxs: np.ndarray[Any, Any],
+    transition: dict[int, int] = TRANSITION_MNIST,
+    num_classes: int = 10,
+) -> np.ndarray[Any, Any]:
+    """
+    Generates asymmetric noise.
+    """
+    noisy_labels = np.copy(y_gt)
+    for idx in noisy_label_idxs:
+        noisy_labels[idx] = transition[y_gt[idx].item()]
+    return noisy_labels
+
+
+def _generate_instance_dependent_noise(
+    x: np.ndarray[Any, Any],
+    y_gt: np.ndarray[Any, Any],
+    noise_rate: float,
+    noisy_label_idxs: np.ndarray[Any, Any],
+    transition: dict[int, int] = TRANSITION_MNIST,
+    num_classes: int = 10,
+) -> np.ndarray[Any, Any]:
+    """
+    Generates instance dependent noise.
+    """
+    images = np.copy(x)
+    noisy_labels = np.copy(y_gt)
+    flip_rates = truncnorm.rvs(
+        -noise_rate / 0.1,
+        (1.0 - noise_rate) / 0.1,
+        loc=noise_rate,
+        scale=0.1,
+        size=(len(y_gt),),
+    )
+    dim_weights = rng.normal(
+        size=(num_classes, images.shape[1] * images.shape[2], num_classes)
+    )
+    for i in range(y_gt.shape[0]):
+        if i not in noisy_label_idxs:
+            continue
+        p = images[i].reshape(1, -1) @ np.squeeze(dim_weights[y_gt[i]], axis=0)
+        p = np.squeeze(p, axis=0)
+
+        p[y_gt[i]] = -inf
+        p = flip_rates[i] * np.exp(p) / np.sum(np.exp(p))
+        p[y_gt[i]] += 1 - flip_rates[i]
+        noisy_labels[i] = np.argmax(np.random.multinomial(1, p))
+    return noisy_labels
+
+
+def _generate_sr_instance_dependent_noise(
+    x: np.ndarray[Any, Any],
+    y_gt: np.ndarray[Any, Any],
+    noise_rate: float,
+    noisy_label_idxs: np.ndarray[Any, Any],
+    transition: dict[int, int] = TRANSITION_MNIST,
+    num_classes: int = 10,
+) -> np.ndarray[Any, Any]:
+    """
+    Generates similarity reflected instance dependent noise.
+    """
+    return np.copy(y_gt)
+
+
+"""
+Noisy label generator dictionary.
+"""
+_NOISY_LABEL_GEN = {
+    NoiseType.SYMMETRIC: _generate_symmetric_noise,
+    NoiseType.ASYMMETRIC: _generate_asymmetric_noise,
+    NoiseType.INSTANCE_DEPENDENT: _generate_instance_dependent_noise,
+    NoiseType.SIMILARITY_REFLECTED: _generate_sr_instance_dependent_noise,
+}
+
+
+def generate_noisy_labels(
+    *,
+    noise_rate: float,
+    x: np.ndarray[Any, Any],
+    y_gt: np.ndarray[Any, Any],
     noise_mode: NoiseType = NoiseType.SYMMETRIC,
-    transition: dict[int, int] = TRANSITION,
+    dataset_name: str = "mnist",
+    num_classes: int = 10,
 ) -> np.ndarray[Any, Any]:
     """
     Creates noisy labels by randomly sampling from ground truth labels
@@ -91,19 +202,15 @@ def generate_noisy_labels(
     """
     rng = np.random.default_rng()
 
-    noisy_labels = np.copy(gt_labels)
-    idxs = np.arange(gt_labels.shape[0])
+    idxs = np.arange(y_gt.shape[0])
     rng.shuffle(idxs)
 
-    noisy_label_idxs = idxs[: int(noise_rate * len(gt_labels))]
+    noisy_label_idxs = idxs[: int(noise_rate * len(y_gt))]
 
-    if noise_mode == NoiseType.SYMMETRIC:
-        noisy_labels[noisy_label_idxs] = np.random.randint(
-            0, 10, size=noisy_label_idxs.shape
-        )
-    else:
-        for idx in noisy_label_idxs:
-            noisy_labels[idx] = transition[gt_labels[idx].item()]
+    noisy_labels = _NOISY_LABEL_GEN[noise_mode](
+        x, y_gt, noise_rate, noisy_label_idxs, _TRANSITIONS[dataset_name], num_classes
+    )
+
     return noisy_labels
 
 

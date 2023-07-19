@@ -11,7 +11,6 @@ from hydra.core.config_store import ConfigStore
 
 from args import Args
 from src.dataset import (
-    NoiseType,
     load_data,
     get_mean_std,
     train_val_split_idxs,
@@ -22,12 +21,12 @@ from src.dataset import (
 )
 from src.model import CNN, CVAE, ClassifierPostprocessorEnsemble
 from src.prior import generate_prior
+from src import npz_ops
 
 cs = ConfigStore.instance()
 cs.store(name="args", node=Args)
 
-logging.basicConfig(format="%(asctime)s-%(levelname)s: %(message)s",
-                    level=logging.INFO)
+logging.basicConfig(format="%(asctime)s-%(levelname)s: %(message)s", level=logging.INFO)
 
 
 @hydra.main(config_path="./hydra_conf", config_name="config", version_base="1.3")
@@ -56,7 +55,14 @@ def main(args: Args):
     x_test = (x_test - np.min(x_test)) / (np.max(x_test) - np.min(x_test))
 
     # generate noisy labels
-    y_train_noisy = generate_noisy_labels(0.20, y_train, NoiseType.SYMMETRIC)
+    y_train_noisy = generate_noisy_labels(
+        noise_rate=args.npc.noise_rate,
+        x=x_train,
+        y_gt=y_train,
+        cache_path=Path(args.training.cache_dir),
+        noise_mode=args.npc.noise_mode,
+        dataset_name=args.dataset.name,
+    )
 
     # Make datasets
     train_ds = make_dataset(x_train, y_train_noisy, y_train, args.dataset.batch_size)
@@ -93,23 +99,47 @@ def main(args: Args):
     tb_callback_clf = tf.keras.callbacks.TensorBoard(
         log_dir=Path(args.training.log_dir) / "train", histogram_freq=1
     )
-    classifier.fit(
-        train_ds,
-        validation_data=test_ds,
-        epochs=args.training.num_epochs,
-        callbacks=[tb_callback_clf],
+    save_callback_clf = tf.keras.callbacks.ModelCheckpoint(
+        filepath=str(
+            Path(args.training.log_dir)
+            / f"classifier-{args.dataset.name}-{args.npc.noise_mode}-{args.npc.noise_rate}"
+        ),
+        monitor="val_loss",
+        save_best_only=True,
+        save_weights_only=True,
     )
 
-    # Gather predictions after model training for NPC dataset
-    preds = []
-    for x_batch, _, _ in train_ds:
-        _, logits = classifier(x_batch)
-        y_pred = tf.argmax(logits, axis=-1)
-        preds.append(y_pred.numpy())
-    y_pred = np.hstack(preds)
+    # Gather classifier predictions for NPC dataset
+    cls_pred_path = (
+        Path(args.training.cache_dir)
+        / f"cls_preds-{args.dataset.name}-{args.npc.noise_mode}-{args.npc.noise_rate}.npz"
+    )
+    if cls_pred_path.exists():
+        y_pred = npz_ops.load_from_npz(cls_pred_path)
+    else:
+        classifier.fit(
+            train_ds,
+            validation_data=test_ds,
+            epochs=args.training.num_epochs,
+            callbacks=[tb_callback_clf, save_callback_clf],
+        )
 
+        _, y_pred = classifier.predict(x_train)
+        y_pred = np.argmax(y_pred, axis=-1)
+        npz_ops.compress_to_npz(y_pred, cls_pred_path)
     del train_ds
+    del classifier
     gc.collect()
+
+    # Load best saved classifier
+    classifier = CNN(
+        n_classes=args.dataset.n_classes,
+        dim=args.training.model_dim,
+        img_height=args.dataset.img_height,
+        img_width=args.dataset.img_width,
+        n_channels=args.dataset.n_channels,
+    )
+    classifier.load_weights(Path(args.training.log_dir) / "classifier")
 
     # Create dataset for prior generation
     train_pred_ds = make_dataset(x_train, y_pred, y_pred, args.dataset.batch_size)
@@ -120,6 +150,10 @@ def main(args: Args):
         dataset=train_pred_ds,
         n_classes=args.dataset.n_classes,
         n_neighbors=args.npc.n_neighbors,
+        dataset_name=args.dataset.name,
+        noise_rate=args.npc.noise_rate,
+        noise_mode=args.npc.noise_mode,
+        cache_dir=Path(args.training.cache_dir),
     )
     del train_pred_ds
     gc.collect()

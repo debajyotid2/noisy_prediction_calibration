@@ -12,8 +12,8 @@ training:
   cache_dir: ${hydra:runtime.cwd}/cache 
 
 npc:
-  noise_rate: 0.2
-  noise_mode: symmetric
+  noise_rate: 0.5
+  noise_mode: idn
   softplus_beta: 1.0
   n_neighbors: 10
   num_epochs: 10

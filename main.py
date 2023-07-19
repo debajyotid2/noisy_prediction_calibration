@@ -100,7 +100,10 @@ def main(args: Args):
         log_dir=Path(args.training.log_dir) / "train", histogram_freq=1
     )
     save_callback_clf = tf.keras.callbacks.ModelCheckpoint(
-        filepath=str(Path(args.training.log_dir) / "classifier"),
+        filepath=str(
+            Path(args.training.log_dir)
+            / f"classifier-{args.dataset.name}-{args.npc.noise_mode}-{args.npc.noise_rate}"
+        ),
         monitor="val_loss",
         save_best_only=True,
         save_weights_only=True,

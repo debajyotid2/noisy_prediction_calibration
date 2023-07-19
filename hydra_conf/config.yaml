@@ -13,6 +13,7 @@ training:
 
 npc:
   noise_rate: 0.2
+  noise_mode: symmetric
   softplus_beta: 1.0
   n_neighbors: 10
   num_epochs: 10

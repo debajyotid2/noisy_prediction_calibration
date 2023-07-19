@@ -11,7 +11,6 @@ from hydra.core.config_store import ConfigStore
 
 from args import Args
 from src.dataset import (
-    NoiseType,
     load_data,
     get_mean_std,
     train_val_split_idxs,
@@ -22,6 +21,7 @@ from src.dataset import (
 )
 from src.model import CNN, CVAE, ClassifierPostprocessorEnsemble
 from src.prior import generate_prior
+from src import npz_ops
 
 cs = ConfigStore.instance()
 cs.store(name="args", node=Args)
@@ -60,7 +60,7 @@ def main(args: Args):
         x=x_train,
         y_gt=y_train,
         cache_path=Path(args.training.cache_dir),
-        noise_mode=NoiseType.INSTANCE_DEPENDENT,
+        noise_mode=args.npc.noise_mode,
         dataset_name=args.dataset.name,
     )
 
@@ -105,21 +105,25 @@ def main(args: Args):
         save_best_only=True,
         save_weights_only=True,
     )
-    classifier.fit(
-        train_ds,
-        validation_data=test_ds,
-        epochs=args.training.num_epochs,
-        callbacks=[tb_callback_clf, save_callback_clf],
+
+    # Gather classifier predictions for NPC dataset
+    cls_pred_path = (
+        Path(args.training.cache_dir)
+        / f"cls_preds-{args.dataset.name}-{args.npc.noise_mode}-{args.npc.noise_rate}.npz"
     )
+    if cls_pred_path.exists():
+        y_pred = npz_ops.load_from_npz(cls_pred_path)
+    else:
+        classifier.fit(
+            train_ds,
+            validation_data=test_ds,
+            epochs=args.training.num_epochs,
+            callbacks=[tb_callback_clf, save_callback_clf],
+        )
 
-    # Gather predictions after model training for NPC dataset
-    preds = []
-    for x_batch, _, _ in train_ds:
-        _, logits = classifier(x_batch)
-        y_pred = tf.argmax(logits, axis=-1)
-        preds.append(y_pred.numpy())
-    y_pred = np.hstack(preds)
-
+        _, y_pred = classifier.predict(x_train)
+        y_pred = np.argmax(y_pred, axis=-1)
+        npz_ops.compress_to_npz(y_pred, cls_pred_path)
     del train_ds
     del classifier
     gc.collect()
@@ -143,7 +147,10 @@ def main(args: Args):
         dataset=train_pred_ds,
         n_classes=args.dataset.n_classes,
         n_neighbors=args.npc.n_neighbors,
-        cache_dir=Path(args.training.cache_dir)
+        dataset_name=args.dataset.name,
+        noise_rate=args.npc.noise_rate,
+        noise_mode=args.npc.noise_mode,
+        cache_dir=Path(args.training.cache_dir),
     )
     del train_pred_ds
     gc.collect()

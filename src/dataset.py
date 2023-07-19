@@ -209,7 +209,7 @@ def generate_noisy_labels(
     x: np.ndarray[Any, Any],
     y_gt: np.ndarray[Any, Any],
     cache_path: Path,
-    noise_mode: NoiseType = NoiseType.SYMMETRIC,
+    noise_mode: str = "symmetric",
     dataset_name: str = "mnist",
     num_classes: int = 10,
 ) -> np.ndarray[Any, Any]:
@@ -224,16 +224,16 @@ def generate_noisy_labels(
 
     noisy_label_idxs = idxs[: int(noise_rate * len(y_gt))]
 
-    noisy_lbl_path = cache_path / f"{dataset_name}-{noise_mode.value}-noisy.npz"
+    noisy_lbl_path = cache_path / f"{dataset_name}-{noise_mode}-{noise_rate}-noisy.npz"
     if noisy_lbl_path.exists():
         noisy_labels = npz_ops.load_from_npz(noisy_lbl_path)
     else:
-        noisy_labels = _NOISY_LABEL_GEN[noise_mode](
+        noisy_labels = _NOISY_LABEL_GEN[NoiseType(noise_mode)](
             x,
             y_gt,
             noise_rate,
             noisy_label_idxs,
-            cache_path / "sridn_cls_probs.npz",
+            cache_path / f"sridn_cls_probs-{dataset_name}.npz",
             _TRANSITIONS[dataset_name],
             num_classes,
         )

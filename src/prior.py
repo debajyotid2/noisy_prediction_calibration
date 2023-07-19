@@ -19,17 +19,20 @@ def generate_prior(
     dataset: tf.data.Dataset,
     n_classes: int,
     n_neighbors: int = 10,
+    dataset_name: str,
+    noise_mode: str,
+    noise_rate: float,
     cache_dir: Path
 ) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any]]:
     """
     Generates prior using KNN. Dataset must have images and predicted labels.
     (y hat)
     """
-    prob_cache_path = cache_dir / "knn_probs.npz"
+    prob_cache_path = cache_dir / f"knn_probs-{dataset_name}-{noise_mode}-{noise_rate}.npz"
     
     # Load from saved cache if it exists
     if prob_cache_path.exists():
-        padded = npz_ops.load_from_npz(cache_dir / "knn_probs.npz")
+        padded = npz_ops.load_from_npz(prob_cache_path)
         output_labels = np.argmax(padded, axis=-1)
         return output_labels, padded
 

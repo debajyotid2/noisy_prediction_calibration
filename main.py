@@ -55,6 +55,38 @@ def main(args: Args):
     x_test = (x_test - np.min(x_test)) / (np.max(x_test) - np.min(x_test))
 
     # generate noisy labels
+
+    # first, if SRIDN noise and classifer probs for noise generation have not been cached, generate classifier probs.
+    sridn_cls_prob_path = (
+        Path(args.training.cache_dir) / f"sridn_cls_probs-{args.dataset.name}.npz"
+    )
+    if args.npc.noise_mode == "sridn" and not sridn_cls_prob_path.exists():
+        Path(args.training.cache_dir).mkdir(exist_ok=True)
+        sridn_cls = CNN(
+            n_classes=args.dataset.n_classes,
+            dim=args.training.model_dim,
+            img_height=args.dataset.img_height,
+            img_width=args.dataset.img_width,
+            n_channels=args.dataset.n_channels,
+        )
+        sridn_ds = make_dataset(x_train, y_train, y_train, args.dataset.batch_size)
+        loss_func = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
+        clf_optimizer = tf.keras.optimizers.Adam(args.training.learning_rate)
+        sridn_cls.compile(loss=loss_func, optimizer=clf_optimizer, weighted_metrics=[])
+        sridn_cls.fit(
+            sridn_ds,
+            epochs=10,
+        )
+        _, logits = sridn_cls.predict(x_train)
+        probs = np.exp(logits) / np.sum(np.exp(logits))
+        npz_ops.compress_to_npz(probs, sridn_cls_prob_path)
+
+        del sridn_ds
+        del sridn_cls
+        del loss_func
+        del clf_optimizer
+        gc.collect()
+
     y_train_noisy = generate_noisy_labels(
         noise_rate=args.npc.noise_rate,
         x=x_train,
@@ -99,11 +131,13 @@ def main(args: Args):
     tb_callback_clf = tf.keras.callbacks.TensorBoard(
         log_dir=Path(args.training.log_dir) / "train", histogram_freq=1
     )
+    classifier_save_path = (
+        Path(args.training.log_dir)
+        / f"classifier-{args.dataset.name}-{args.npc.noise_mode}-{args.npc.noise_rate}"
+    )
+
     save_callback_clf = tf.keras.callbacks.ModelCheckpoint(
-        filepath=str(
-            Path(args.training.log_dir)
-            / f"classifier-{args.dataset.name}-{args.npc.noise_mode}-{args.npc.noise_rate}"
-        ),
+        filepath=str(classifier_save_path),
         monitor="val_loss",
         save_best_only=True,
         save_weights_only=True,
@@ -139,7 +173,7 @@ def main(args: Args):
         img_width=args.dataset.img_width,
         n_channels=args.dataset.n_channels,
     )
-    classifier.load_weights(Path(args.training.log_dir) / "classifier")
+    classifier.load_weights(classifier_save_path)
 
     # Create dataset for prior generation
     train_pred_ds = make_dataset(x_train, y_pred, y_pred, args.dataset.batch_size)

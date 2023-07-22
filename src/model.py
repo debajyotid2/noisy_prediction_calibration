@@ -574,8 +574,6 @@ class ClassifierPostprocessorEnsemble(Model):
         probs = tf.expand_dims(probs, axis=1)
         probs = tf.repeat(probs, self.n_classes, axis=1)
 
-        breakpoint()
-
         # Generate final labels
         final_probs = ae_probs * probs
         pseudolabels = tf.argmax(tf.reduce_sum(final_probs, axis=2), axis=1)

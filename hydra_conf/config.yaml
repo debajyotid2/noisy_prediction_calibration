@@ -3,16 +3,16 @@ defaults:
   - _self_
 
 training:
-  num_epochs: 10
+  num_epochs: 1
   learning_rate: 0.001
   seed: 123
   model_dim: 16
-  dropout_p: 0.2
+  dropout_p: 0.3
   log_dir: ${hydra:runtime.cwd}/logs
   cache_dir: ${hydra:runtime.cwd}/cache 
 
 npc:
-  noise_rate: 0.5
+  noise_rate: 0.2
   noise_mode: sridn
   softplus_beta: 1.0
   n_neighbors: 10

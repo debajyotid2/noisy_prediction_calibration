@@ -106,6 +106,9 @@ def _generate_symmetric_noise(
     Generates symmetric noise.
     """
     noisy_labels = np.copy(y_gt)
+
+    if noise_rate == 0:
+        return noisy_labels
     noisy_labels[noisy_label_idxs] = np.random.randint(
         0, num_classes, size=noisy_label_idxs.shape
     )
@@ -125,6 +128,9 @@ def _generate_asymmetric_noise(
     Generates asymmetric noise.
     """
     noisy_labels = np.copy(y_gt)
+
+    if noise_rate == 0:
+        return noisy_labels
     for idx in noisy_label_idxs:
         noisy_labels[idx] = transition[y_gt[idx].item()]
     return noisy_labels
@@ -146,6 +152,9 @@ def _generate_instance_dependent_noise(
 
     images = np.copy(x)
     noisy_labels = np.copy(y_gt)
+
+    if noise_rate == 0:
+        return noisy_labels
     flip_rates = truncnorm.rvs(
         -noise_rate / 0.1,
         (1.0 - noise_rate) / 0.1,
@@ -183,6 +192,8 @@ def _generate_sr_instance_dependent_noise(
     """
 
     noisy_labels = np.copy(y_gt)
+    if noise_rate == 0:
+        return noisy_labels
     if not sridn_cls_prob_path.exists():
         raise RuntimeError(f"{sridn_cls_prob_path.resolve()} does not exist.")
     probs_classifier = npz_ops.load_from_npz(sridn_cls_prob_path)
@@ -222,7 +233,7 @@ def generate_noisy_labels(
         raise ValueError(f"Subset must be one of train, test.")
 
     rng = np.random.default_rng()
-
+    
     idxs = np.arange(y_gt.shape[0])
     rng.shuffle(idxs)
 

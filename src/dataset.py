@@ -110,7 +110,7 @@ def _generate_symmetric_noise(
     if noise_rate == 0:
         return noisy_labels
     noisy_labels[noisy_label_idxs] = np.random.randint(
-        0, num_classes, size=noisy_label_idxs.shape
+        0, num_classes, size=noisy_labels.shape
     )
     return noisy_labels
 

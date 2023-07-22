@@ -209,6 +209,7 @@ def generate_noisy_labels(
     x: np.ndarray[Any, Any],
     y_gt: np.ndarray[Any, Any],
     cache_path: Path,
+    subset: str,
     noise_mode: str = "symmetric",
     dataset_name: str = "mnist",
     num_classes: int = 10,
@@ -217,6 +218,9 @@ def generate_noisy_labels(
     Creates noisy labels by randomly sampling from ground truth labels
     according to the type of noise and noise rate (% of noise).
     """
+    if subset not in ["train", "test"]:
+        raise ValueError(f"Subset must be one of train, test.")
+
     rng = np.random.default_rng()
 
     idxs = np.arange(y_gt.shape[0])
@@ -224,7 +228,7 @@ def generate_noisy_labels(
 
     noisy_label_idxs = idxs[: int(noise_rate * len(y_gt))]
 
-    noisy_lbl_path = cache_path / f"{dataset_name}-{noise_mode}-{noise_rate}-noisy.npz"
+    noisy_lbl_path = cache_path / f"{dataset_name}-{subset}-{noise_mode}-{noise_rate}-noisy.npz"
     if noisy_lbl_path.exists():
         noisy_labels = npz_ops.load_from_npz(noisy_lbl_path)
     else:
@@ -233,7 +237,7 @@ def generate_noisy_labels(
             y_gt,
             noise_rate,
             noisy_label_idxs,
-            cache_path / f"sridn_cls_probs-{dataset_name}.npz",
+            cache_path / f"sridn_cls_probs-{dataset_name}-{subset}.npz",
             _TRANSITIONS[dataset_name],
             num_classes,
         )

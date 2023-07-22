@@ -35,9 +35,14 @@ logging.basicConfig(format="%(asctime)s-%(levelname)s: %(message)s", level=loggi
 
 @hydra.main(config_path="./hydra_conf", config_name="config", version_base="1.3")
 def main(args: Args):
+    logging.info(f"Running with arguments \n{args} \n.")
     np.random.seed(args.training.seed)
 
     x_train, y_train, x_test, y_test = load_data(args.dataset.name)
+    x_train, y_train = (
+        x_train[: args.dataset.data_size],
+        y_train[: args.dataset.data_size],
+    )
 
     # preprocess data
 
@@ -60,12 +65,16 @@ def main(args: Args):
 
     # generate noisy labels
 
-
     # first, if SRIDN noise and classifer probs for noise generation have not been cached, generate classifier probs.
-    sridn_cls_prob_path = (
-        Path(args.training.cache_dir) / f"sridn_cls_probs-{args.dataset.name}.npz"
+    sridn_cls_prob_path_train = (
+        Path(args.training.cache_dir) / f"sridn_cls_probs-{args.dataset.name}-train.npz"
     )
-    if args.npc.noise_mode == "sridn" and not sridn_cls_prob_path.exists():
+    sridn_cls_prob_path_test = (
+        Path(args.training.cache_dir) / f"sridn_cls_probs-{args.dataset.name}-test.npz"
+    )
+    if args.npc.noise_mode == "sridn" and not all(
+        [sridn_cls_prob_path_train.exists(), sridn_cls_prob_path_test.exists()]
+    ):
         Path(args.training.cache_dir).mkdir(exist_ok=True)
         cnn_obj = load_cnn(args.dataset.name)
         sridn_cls = cnn_obj(
@@ -83,9 +92,13 @@ def main(args: Args):
             sridn_ds,
             epochs=10,
         )
-        _, logits = sridn_cls.predict(x_train)
-        probs = np.exp(logits) / np.sum(np.exp(logits))
-        npz_ops.compress_to_npz(probs, sridn_cls_prob_path)
+        _, train_logits = sridn_cls.predict(x_train)
+        _, test_logits = sridn_cls.predict(x_test)
+        train_probs = np.exp(train_logits) / np.sum(np.exp(train_logits))
+        test_probs = np.exp(test_logits) / np.sum(np.exp(test_logits))
+
+        npz_ops.compress_to_npz(train_probs, sridn_cls_prob_path_train)
+        npz_ops.compress_to_npz(test_probs, sridn_cls_prob_path_test)
 
         del sridn_ds
         del sridn_cls
@@ -98,6 +111,16 @@ def main(args: Args):
         noise_rate=args.npc.noise_rate,
         x=x_train,
         y_gt=y_train,
+        subset="train",
+        cache_path=Path(args.training.cache_dir),
+        noise_mode=args.npc.noise_mode,
+        dataset_name=args.dataset.name,
+    )
+    y_test_noisy = generate_noisy_labels(
+        noise_rate=args.npc.noise_rate,
+        x=x_test,
+        y_gt=y_test,
+        subset="test",
         cache_path=Path(args.training.cache_dir),
         noise_mode=args.npc.noise_mode,
         dataset_name=args.dataset.name,
@@ -105,7 +128,7 @@ def main(args: Args):
 
     # Make datasets
     train_ds = make_dataset(x_train, y_train_noisy, y_train, args.dataset.batch_size)
-    test_ds = make_dataset(x_test, y_test, y_test, args.dataset.batch_size)
+    test_ds = make_dataset(x_test, y_test_noisy, y_test, args.dataset.batch_size)
 
     # Initialize classifier and autoencoder
     cnn_obj = load_cnn(args.dataset.name)
@@ -135,7 +158,7 @@ def main(args: Args):
         learning_rate=args.training.learning_rate, clipnorm=args.npc.clipnorm
     )
 
-    # Train classifier on noisy labels
+    # 1. Train classifier on noisy labels
     classifier.compile(loss=loss_func, optimizer=clf_optimizer, weighted_metrics=[])
 
     tb_callback_clf = tf.keras.callbacks.TensorBoard(
@@ -153,12 +176,12 @@ def main(args: Args):
         save_weights_only=True,
     )
 
-    # Gather classifier predictions for NPC dataset
+    # Path to save classifier predictions for NPC dataset
     cls_pred_path = (
         Path(args.training.cache_dir)
         / f"cls_preds-{args.dataset.name}-{args.npc.noise_mode}-{args.npc.noise_rate}.npz"
     )
-    
+
     # Load best saved classifier
     if cls_pred_path.exists() and classifier_save_path.exists():
         y_pred = npz_ops.load_from_npz(cls_pred_path)
@@ -176,14 +199,21 @@ def main(args: Args):
         y_pred = np.argmax(y_pred, axis=-1)
         npz_ops.compress_to_npz(y_pred, cls_pred_path)
         classifier.load_weights(classifier_save_path)
-        
+
         del train_ds
         gc.collect()
 
+    # Get test dataset accuracy on trained classifier
+    _, test_logits = classifier.predict(test_ds)
+    test_preds = np.argmax(test_logits, axis=-1)
+    logging.info(
+            f"Classifier accuracy = {np.mean(np.equal(test_preds, y_test_noisy[:test_preds.shape[0]]))*100:.2f} %."
+    )
+
+    # 2. Generate prior
     # Create dataset for prior generation
     train_pred_ds = make_dataset(x_train, y_pred, y_pred, args.dataset.batch_size)
 
-    # Generate prior
     prior_labels, prior_probabilities = generate_prior(
         classifier=classifier,
         dataset=train_pred_ds,
@@ -197,6 +227,7 @@ def main(args: Args):
     del train_pred_ds
     gc.collect()
 
+    # 3. Perform postprocessing using NPC
     # Create dataset for NPC
     train_idxs, val_idxs = train_val_split_idxs(
         prior_labels.shape[0], args.dataset.val_frac
@@ -237,7 +268,9 @@ def main(args: Args):
         preds = ensemble((x_batch, y_label, y_label))
         preds = tf.cast(preds, tf.float32)
         final_accuracy += tf.reduce_sum(tf.where(preds == y_label, 1.0, 0.0))
-    logging.info(f"Accuracy = {final_accuracy / x_test.shape[0] * 100.0:.2f} %")
+    logging.info(
+        f"Post-processing accuracy = {final_accuracy / x_test.shape[0] * 100.0:.2f} %"
+    )
 
 
 if __name__ == "__main__":

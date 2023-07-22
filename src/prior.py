@@ -26,7 +26,7 @@ def generate_prior(
 ) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any]]:
     """
     Generates prior using KNN. Dataset must have images and predicted labels.
-    (y hat)
+    (y hat). Ensure that the dataset has batch size 1.
     """
     prob_cache_path = cache_dir / f"knn_probs-{dataset_name}-{noise_mode}-{noise_rate}.npz"
     
@@ -51,12 +51,13 @@ def generate_prior(
         class_idx_dict = dict.fromkeys(list(range(n_classes)), list())
         for idx, y_pred in enumerate(y_preds):
             label = tf.argmax(y_pred, axis=-1)
-            class_idx_dict[label.numpy()].append(idx)
+            class_idx_dict[label.numpy().item()].append(idx)
 
         # Get embeddings and logits
         embedding, logits = classifier(x_batch)
         probs = tf.nn.softmax(logits)
         probs = probs.numpy()
+        probs = np.squeeze(probs)
 
         # Gather embeddings for given class
         for class_id in range(n_classes):
@@ -64,7 +65,7 @@ def generate_prior(
                 continue
             class_idxs = np.asarray(class_idx_dict[class_id], dtype=np.int32)
             gathered = np.argsort(probs[class_idxs, class_id])
-            embeddings.append(embedding[class_idxs[gathered[-1]]])
+            embeddings.append(embedding.numpy()[class_idxs[gathered[-1]]])
             classes.append(class_id)
 
     logging.info(f"Initial embeddings generated in {(perf_counter() - start_time)/60:.2f} minutes.")
@@ -74,6 +75,7 @@ def generate_prior(
     start_time = perf_counter()
     classes = np.asarray(classes, dtype=np.int32)
     embeddings = np.asarray(embeddings, dtype=np.int32)
+    embeddings = np.squeeze(embeddings)
     knn.fit(embeddings, classes)
     del embeddings
 
@@ -81,12 +83,12 @@ def generate_prior(
     # Generate predictions using KNN for classes
     # NOTE: New embeddings must be generated for prediction
     start_time = perf_counter()
-    embeddings = np.zeros((len_train, int(classifier.dim**2.0)))
+    embeddings = np.zeros((len_train, int(classifier.emb_dim)))
     for idx, (x_batch, _, _) in enumerate(dataset):
         img_emb, _ = classifier(x_batch)
         embeddings[
             idx * x_batch.shape[0] : (idx + 1) * x_batch.shape[0]
-        ] = img_emb.numpy()
+        ] = np.squeeze(img_emb.numpy())
 
     logging.info(f"New embeddings generated in {(perf_counter() - start_time)/60:.2f} minutes.")
     

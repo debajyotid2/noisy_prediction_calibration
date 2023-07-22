@@ -19,7 +19,11 @@ from src.dataset import (
     make_dataset,
     make_npc_dataset,
 )
-from src.model import CNN, CVAE, ClassifierPostprocessorEnsemble
+from src.model import (
+    load_cnn,
+    CVAE,
+    ClassifierPostprocessorEnsemble,
+)
 from src.prior import generate_prior
 from src import npz_ops
 
@@ -56,13 +60,15 @@ def main(args: Args):
 
     # generate noisy labels
 
+
     # first, if SRIDN noise and classifer probs for noise generation have not been cached, generate classifier probs.
     sridn_cls_prob_path = (
         Path(args.training.cache_dir) / f"sridn_cls_probs-{args.dataset.name}.npz"
     )
     if args.npc.noise_mode == "sridn" and not sridn_cls_prob_path.exists():
         Path(args.training.cache_dir).mkdir(exist_ok=True)
-        sridn_cls = CNN(
+        cnn_obj = load_cnn(args.dataset.name)
+        sridn_cls = cnn_obj(
             n_classes=args.dataset.n_classes,
             dim=args.training.model_dim,
             img_height=args.dataset.img_height,
@@ -85,6 +91,7 @@ def main(args: Args):
         del sridn_cls
         del loss_func
         del clf_optimizer
+        del cnn_obj
         gc.collect()
 
     y_train_noisy = generate_noisy_labels(
@@ -101,14 +108,17 @@ def main(args: Args):
     test_ds = make_dataset(x_test, y_test, y_test, args.dataset.batch_size)
 
     # Initialize classifier and autoencoder
-    classifier = CNN(
+    cnn_obj = load_cnn(args.dataset.name)
+    classifier = cnn_obj(
         n_classes=args.dataset.n_classes,
         dim=args.training.model_dim,
         img_height=args.dataset.img_height,
         img_width=args.dataset.img_width,
         n_channels=args.dataset.n_channels,
     )
+
     autoencoder = CVAE(
+        dataset_name=args.dataset.name,
         n_classes=args.dataset.n_classes,
         dim=args.training.model_dim,
         img_height=args.dataset.img_height,
@@ -148,9 +158,13 @@ def main(args: Args):
         Path(args.training.cache_dir)
         / f"cls_preds-{args.dataset.name}-{args.npc.noise_mode}-{args.npc.noise_rate}.npz"
     )
-    if cls_pred_path.exists():
+    
+    # Load best saved classifier
+    if cls_pred_path.exists() and classifier_save_path.exists():
         y_pred = npz_ops.load_from_npz(cls_pred_path)
+        classifier.load_weights(classifier_save_path)
     else:
+        # Train classifier
         classifier.fit(
             train_ds,
             validation_data=test_ds,
@@ -161,19 +175,10 @@ def main(args: Args):
         _, y_pred = classifier.predict(x_train)
         y_pred = np.argmax(y_pred, axis=-1)
         npz_ops.compress_to_npz(y_pred, cls_pred_path)
-    del train_ds
-    del classifier
-    gc.collect()
-
-    # Load best saved classifier
-    classifier = CNN(
-        n_classes=args.dataset.n_classes,
-        dim=args.training.model_dim,
-        img_height=args.dataset.img_height,
-        img_width=args.dataset.img_width,
-        n_channels=args.dataset.n_channels,
-    )
-    classifier.load_weights(classifier_save_path)
+        classifier.load_weights(classifier_save_path)
+        
+        del train_ds
+        gc.collect()
 
     # Create dataset for prior generation
     train_pred_ds = make_dataset(x_train, y_pred, y_pred, args.dataset.batch_size)

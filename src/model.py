@@ -2,16 +2,21 @@
 Basic convolutional network for image classification.
 """
 
-from typing import Any, Callable
+from typing import Any, Callable, TypeVar
 import tensorflow as tf
 from tensorflow.keras import Model
 from tensorflow.keras.layers import (
     Conv2D,
+    MaxPooling2D,
+    AveragePooling2D,
     Dense,
     Flatten,
     Dropout,
+    Layer,
+    Reshape,
     InputLayer,
     BatchNormalization,
+    LeakyReLU,
 )
 
 
@@ -24,20 +29,45 @@ def softplus(x: tf.Tensor, beta: float) -> tf.Tensor:
     return 1.0 / beta * tf.math.log(1 + tf.exp(beta * x))
 
 
-class CNN(Model):
+class ConvBlock(Layer):
     """
-    Convolutional image classifier.
+    Basic building block of a convolutional net.
+    """
+
+    def __init__(self, dim: int, lr_alpha: float = 0.01):
+        super().__init__()
+        self.layer = tf.keras.Sequential(
+            layers=[
+                Conv2D(dim, kernel_size=3, strides=1, padding="same"),
+                BatchNormalization(),
+                LeakyReLU(alpha=lr_alpha),
+            ]
+        )
+
+    @tf.function
+    def call(self, inputs: tf.Tensor, training: bool = False) -> tf.Tensor:
+        """
+        Call method.
+        """
+        return self.layer(inputs, training=training)
+
+
+class CNN_CIFAR(Model):
+    """
+    CNN classifier for CIFAR dataset.
     """
 
     def __init__(
         self,
         *,
         n_classes: int = 10,
-        dim: int = 16,
-        img_height: int = 28,
-        img_width: int = 28,
-        n_channels: int = 1,
-        dropout_p: float = 0.2,
+        img_height: int = 32,
+        img_width: int = 32,
+        n_channels: int = 3,
+        dim: int = 128,
+        lr_alpha: float = 0.01,
+        n_blocks_p_dim: int = 3,
+        dropout_p: float = 0.3,
     ):
         super().__init__()
         self.dim = dim
@@ -47,20 +77,71 @@ class CNN(Model):
         self.accuracy_metric_noisy = tf.keras.metrics.Accuracy(name="accuracy_noisy")
         self.accuracy_metric_clean = tf.keras.metrics.Accuracy(name="accuracy_clean")
 
-        # Model
-        self.model = tf.keras.Sequential(
-            layers=[
-                InputLayer((img_height, img_width, n_channels)),
-                Conv2D(dim / 2, kernel_size=3, padding="same", activation="relu"),
-                BatchNormalization(),
-                Conv2D(dim, kernel_size=3, padding="same", activation="tanh"),
-                Flatten(),
-                Dense(img_height * img_width),
-                Dropout(dropout_p),
-                Dense(dim * dim),
-            ]
+        layers = []
+
+        layers.append(InputLayer(input_shape=(img_height, img_width, n_channels)))
+        layers.append(ConvBlock(dim))
+        for _ in range(n_blocks_p_dim - 1):
+            layers.append(ConvBlock(dim))
+        layers.append(ConvBlock(2 * dim))
+        layers.extend([MaxPooling2D(pool_size=2, strides=2), Dropout(rate=dropout_p)])
+
+        for _ in range(n_blocks_p_dim - 1):
+            layers.append(ConvBlock(2 * dim))
+        layers.append(ConvBlock(4 * dim))
+        layers.extend([MaxPooling2D(pool_size=2, strides=2), Dropout(rate=dropout_p)])
+
+        layers.append(ConvBlock(2 * dim))
+        layers.append(ConvBlock(dim))
+
+        self.convnet = tf.keras.Sequential(layers=layers)
+
+        convnet_outdim = self._get_convnet_out_dims(img_height, img_width, n_channels)
+        self.avgpool = AveragePooling2D(pool_size=convnet_outdim[2], padding="same")
+        pool_outdim = self._get_avgpool_out_dims(img_height, img_width, n_channels)
+        self.reshape = Reshape(
+            (
+                -1,
+                pool_outdim[-1],
+            )
         )
-        self.output_layer = Dense(n_classes)
+        self.classifier = Dense(n_classes)
+
+        # Embedding dim
+        self.emb_dim = pool_outdim[-1]
+
+    def _get_convnet_out_dims(
+        self, img_height: int, img_width: int, n_channels: int
+    ) -> tf.TensorShape:
+        """
+        Get shape of output of convnet for deciding avg pool kernel
+        size.
+        """
+        random_inputs = tf.random.normal(shape=(1, img_height, img_width, n_channels))
+        conv_out = self.convnet(random_inputs)
+        return conv_out.shape
+
+    def _get_avgpool_out_dims(
+        self, img_height: int, img_width: int, n_channels: int
+    ) -> tf.TensorShape:
+        """
+        Get shape of output of avg pooling layer for deciding reshape
+        size.
+        """
+        random_inputs = tf.random.normal(shape=(1, img_height, img_width, n_channels))
+        pool_out = self.avgpool(self.convnet(random_inputs))
+        return pool_out.shape
+
+    @tf.function
+    def call(
+        self, inputs: tf.Tensor, training: bool = False
+    ) -> tuple[tf.Tensor, tf.Tensor]:
+        """
+        Call method.
+        """
+        conv_out = self.convnet(inputs, training=training)
+        pooled = self.reshape(self.avgpool(conv_out))
+        return pooled, self.classifier(pooled)
 
     @property
     def metrics(self) -> list[tf.keras.metrics.Metric]:
@@ -74,17 +155,6 @@ class CNN(Model):
         ]
 
     @tf.function
-    def call(
-        self, input_tensor: tf.Tensor, training: bool = False
-    ) -> tuple[tf.Tensor, tf.Tensor]:
-        """
-        Returns model outputs.
-        """
-        model_out = self.model(input_tensor, training=training)
-        logits = self.output_layer(model_out)
-        return model_out, logits
-
-    @tf.function
     def train_step(
         self, data: tuple[tf.Tensor, tf.Tensor, tf.Tensor], training: bool = True
     ) -> dict[str, tf.Tensor]:
@@ -96,8 +166,8 @@ class CNN(Model):
         with tf.GradientTape() as tape:
             _, logits = self(x_batch, training=training)
             loss = self.loss(y_batch_noisy, logits)
-        grad = tape.gradient(loss, self.model.trainable_variables)
-        self.optimizer.apply_gradients(zip(grad, self.model.trainable_variables))
+        grad = tape.gradient(loss, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(grad, self.trainable_variables))
 
         y_pred = tf.argmax(logits, axis=-1)
         y_noisy = tf.argmax(y_batch_noisy, axis=-1)
@@ -139,6 +209,136 @@ class CNN(Model):
         )
 
 
+class CNN_MNIST(Model):
+    """
+    Convolutional image classifier for MNIST and FMNIST.
+    """
+
+    def __init__(
+        self,
+        *,
+        n_classes: int = 10,
+        dim: int = 16,
+        img_height: int = 28,
+        img_width: int = 28,
+        n_channels: int = 1,
+        dropout_p: float = 0.3,
+    ):
+        super().__init__()
+        self.dim = dim
+
+        # Loss and accuracy trackers
+        self.loss_tracker = tf.keras.metrics.Mean(name="loss")
+        self.accuracy_metric_noisy = tf.keras.metrics.Accuracy(name="accuracy_noisy")
+        self.accuracy_metric_clean = tf.keras.metrics.Accuracy(name="accuracy_clean")
+
+        # Model
+        self.model = tf.keras.Sequential(
+            layers=[
+                InputLayer((img_height, img_width, n_channels)),
+                Conv2D(dim / 2, kernel_size=3, padding="same", activation="relu"),
+                BatchNormalization(),
+                Conv2D(dim, kernel_size=3, padding="same", activation="tanh"),
+                Flatten(),
+                Dense(img_height * img_width),
+                Dropout(dropout_p),
+                Dense(dim * dim),
+            ]
+        )
+        self.output_layer = Dense(n_classes)
+
+        # Embedding dim
+        self.emb_dim = dim * dim
+
+    @tf.function
+    def call(
+        self, input_tensor: tf.Tensor, training: bool = False
+    ) -> tuple[tf.Tensor, tf.Tensor]:
+        """
+        Returns model outputs.
+        """
+        model_out = self.model(input_tensor, training=training)
+        logits = self.output_layer(model_out)
+        return model_out, logits
+
+    @property
+    def metrics(self) -> list[tf.keras.metrics.Metric]:
+        """
+        Returns list of metrics.
+        """
+        return [
+            self.loss_tracker,
+            self.accuracy_metric_noisy,
+            self.accuracy_metric_clean,
+        ]
+
+    @tf.function
+    def train_step(
+        self, data: tuple[tf.Tensor, tf.Tensor, tf.Tensor], training: bool = True
+    ) -> dict[str, tf.Tensor]:
+        """
+        Training step.
+        """
+        x_batch, y_batch_noisy, y_batch_clean = data
+
+        with tf.GradientTape() as tape:
+            _, logits = self(x_batch, training=training)
+            loss = self.loss(y_batch_noisy, logits)
+        grad = tape.gradient(loss, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(grad, self.trainable_variables))
+
+        y_pred = tf.argmax(logits, axis=-1)
+        y_noisy = tf.argmax(y_batch_noisy, axis=-1)
+
+        # Update metrics
+        self.loss_tracker.update_state(loss)
+        self.accuracy_metric_noisy.update_state(y_pred, y_noisy)
+        self.accuracy_metric_clean.update_state(y_pred, y_batch_clean)
+
+        return dict(
+            train_loss=self.loss_tracker.result(),
+            train_acc_noisy=self.accuracy_metric_noisy.result(),
+            train_acc_clean=self.accuracy_metric_clean.result(),
+        )
+
+    @tf.function
+    def test_step(
+        self, data: tuple[tf.Tensor, tf.Tensor, tf.Tensor]
+    ) -> dict[str, tf.Tensor]:
+        """
+        Validation step.
+        """
+        x_batch, y_batch_noisy, y_batch_clean = data
+        _, logits = self(x_batch, training=False)
+        y_pred = tf.argmax(logits, axis=-1)
+        loss = self.loss(y_batch_noisy, logits)
+        y_pred = tf.argmax(logits, axis=-1)
+        y_noisy = tf.argmax(y_batch_noisy, axis=-1)
+
+        # Update metrics
+        self.loss_tracker.update_state(loss)
+        self.accuracy_metric_noisy.update_state(y_pred, y_noisy)
+        self.accuracy_metric_clean.update_state(y_pred, y_batch_clean)
+
+        return dict(
+            loss=self.loss_tracker.result(),
+            acc_noisy=self.accuracy_metric_noisy.result(),
+            acc_clean=self.accuracy_metric_clean.result(),
+        )
+
+
+CNNS = {"cifar10": CNN_CIFAR, "mnist": CNN_MNIST, "fashion mnist": CNN_MNIST}
+
+
+def load_cnn(dataset_name: str) -> TypeVar:
+    """
+    Loads the appropriate CNN class as per the dataset.
+    """
+    if dataset_name not in CNNS:
+        raise ValueError(f"Invalid dataset {dataset_name}.")
+    return CNNS[dataset_name]
+
+
 class CVAE(Model):
     """
     Convolutional variational autoencoder for noisy labels.
@@ -147,6 +347,7 @@ class CVAE(Model):
     def __init__(
         self,
         *,
+        dataset_name: str,
         n_classes: int = 10,
         dim: int = 16,
         img_height: int = 28,
@@ -175,7 +376,7 @@ class CVAE(Model):
         self.loss_tracker = tf.keras.metrics.Mean(name="loss")
 
         # models
-        self.forward_encoder = CNN(
+        self.forward_encoder = load_cnn(dataset_name)(
             n_classes=n_classes,
             dim=dim,
             img_height=img_height,
@@ -183,15 +384,19 @@ class CVAE(Model):
             n_channels=n_channels,
             dropout_p=dropout_p,
         )
-        self.encoder = Dense(n_classes)
-        self.decoder = Dense(n_classes)
+        self.encoder = tf.keras.Sequential(
+            layers=[InputLayer((2 * n_classes,)), Dense(n_classes)]
+        )
+        self.decoder = tf.keras.Sequential(
+            layers=[InputLayer((2 * n_classes,)), Dense(n_classes)]
+        )
 
     def encode(self, images: tf.Tensor, labels: tf.Tensor) -> tf.Tensor:
         """
         Encodes.
         """
         _, logits = self.forward_encoder(images)
-        joined = tf.concat([logits, labels], axis=1)
+        joined = tf.concat([tf.squeeze(logits), tf.squeeze(labels)], axis=1)
         encoded = self.encoder(joined) + 1.0 + 1.0 / self.n_classes
         return softplus(encoded, self.softplus_beta)
 
@@ -210,7 +415,7 @@ class CVAE(Model):
         Decodes.
         """
         _, logits = self.forward_encoder(inputs)
-        joined = tf.concat([logits, labels], axis=1)
+        joined = tf.concat([tf.squeeze(logits), tf.squeeze(labels)], axis=1)
         return self.decoder(joined)
 
     @tf.function
@@ -258,7 +463,11 @@ class CVAE(Model):
         Compute reconstruction and distribution losses.
         """
         rec_loss = tf.reduce_sum(self.bce_with_logits(y_pred, y_gen))
-        alpha_prior = self.prior_norm * y_prior + 1.0 + 1.0 / y_gen.shape[-1]
+        alpha_prior = (
+            self.prior_norm * y_prior
+            + 1.0
+            + 1.0 / tf.cast(tf.shape(y_gen)[-1], tf.float32)
+        )
         dist_loss = self.kld_reg * tf.reduce_sum(
             self._kl_divergence(alpha_prior, alpha_inferred)
         )
@@ -343,7 +552,7 @@ class ClassifierPostprocessorEnsemble(Model):
 
         # Calculate p(y_hat | x)
         _, logits = self.classifier(x_batch, training=training)
-        probs = tf.nn.softmax(logits)
+        probs = tf.nn.softmax(tf.squeeze(logits))
 
         # Calculate p(y| y_hat, x)
         ae_probs = tf.Variable(

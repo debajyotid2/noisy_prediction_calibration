@@ -163,14 +163,17 @@ def _generate_instance_dependent_noise(
         size=(len(y_gt),),
     )
     dim_weights = rng.normal(
-        size=(num_classes, images.shape[1] * images.shape[2], num_classes)
+        size=(
+            num_classes,
+            images.shape[1] * images.shape[2] * images.shape[3],
+            num_classes,
+        )
     )
     for i in range(y_gt.shape[0]):
         if i not in noisy_label_idxs:
             continue
         p = images[i].reshape(1, -1) @ dim_weights[y_gt[i]]
-        p = np.squeeze(p, axis=0)
-
+        p = np.squeeze(p)
         p[y_gt[i]] = -inf
         p = flip_rates[i] * np.exp(p) / np.sum(np.exp(p))
         p[y_gt[i]] += 1 - flip_rates[i]
@@ -233,13 +236,15 @@ def generate_noisy_labels(
         raise ValueError(f"Subset must be one of train, test.")
 
     rng = np.random.default_rng()
-    
+
     idxs = np.arange(y_gt.shape[0])
     rng.shuffle(idxs)
 
     noisy_label_idxs = idxs[: int(noise_rate * len(y_gt))]
 
-    noisy_lbl_path = cache_path / f"{dataset_name}-{subset}-{noise_mode}-{noise_rate}-noisy.npz"
+    noisy_lbl_path = (
+        cache_path / f"{dataset_name}-{subset}-{noise_mode}-{noise_rate}-noisy.npz"
+    )
     if noisy_lbl_path.exists():
         noisy_labels = npz_ops.load_from_npz(noisy_lbl_path)
     else:

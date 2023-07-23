@@ -38,7 +38,11 @@ def main(args: Args):
     logging.info(f"Running with arguments \n{args} \n.")
     np.random.seed(args.training.seed)
 
+    rng = np.random.default_rng()
+
     x_train, y_train, x_test, y_test = load_data(args.dataset.name)
+    rng.shuffle(x_train)
+    rng.shuffle(y_train)
     x_train, y_train = (
         x_train[: args.dataset.data_size],
         y_train[: args.dataset.data_size],
@@ -267,7 +271,7 @@ def main(args: Args):
     for x_batch, _, y_label in test_ds:
         preds = ensemble((x_batch, y_label, y_label))
         preds = tf.cast(preds, tf.float32)
-        final_accuracy += tf.reduce_sum(tf.where(preds == y_label, 1.0, 0.0))
+        final_accuracy += tf.reduce_sum(tf.where(preds == tf.squeeze(y_label), 1.0, 0.0))
     logging.info(
         f"Post-processing accuracy = {final_accuracy / x_test.shape[0] * 100.0:.2f} %"
     )
